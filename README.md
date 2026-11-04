@@ -1,6 +1,11 @@
 # Ostranauts Multiplayer Mod (Direct IP)
 
+> ⚠️ **WIP (Work In Progress):** This mod is in early development. Expect bugs, synchronization issues, and potential crashes. Use with caution and backup your saves!
+
 A client-server multiplayer mod for **Ostranauts** utilizing an authoritative listen server model. One player acts as the Host (Server), and another connects as the Client via a direct IP address.
+
+Made for Ostranauts v1.0.1.8a  
+Not been tested on more recent builds.
 
 ## How it works
 * **Authoritative Host:** The host manages game logic, simulation, and world state.
