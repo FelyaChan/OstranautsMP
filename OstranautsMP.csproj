@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!-- Build: dotnet build -c Release   (output: bin\Release\net472\OstranautsMP.dll)
+	     Install: copy the DLL to <GameDir>\BepInEx\plugins\OstranautsMP\ on both PCs.
+	     If the game is elsewhere: dotnet build -c Release -p:GameDir="D:\path\to\Ostranauts" -->
+
+	<PropertyGroup>
+		<TargetFramework>net472</TargetFramework>
+		<LangVersion>7.3</LangVersion>
+		<AssemblyName>OstranautsMP</AssemblyName>
+		<RootNamespace>OstranautsMP</RootNamespace>
+		<Optimize>true</Optimize>
+		<NoStdLib>true</NoStdLib>
+		<DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+		<AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+		<GameDir Condition="'$(GameDir)' == ''">C:\Games\Ostranauts v1.0.1.8a</GameDir>
+		<Managed>$(GameDir)\Ostranauts_Data\Managed</Managed>
+		<BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
+		<!-- The game's own mscorlib etc. instead of a .NET Framework targeting pack. -->
+		<FrameworkPathOverride>$(Managed)</FrameworkPathOverride>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Compile Remove="obsolete\**" />
+		<!-- The Multiplayer button pictures, read by MenuLook as OstranautsMP.<file>. -->
+		<EmbeddedResource Include="res\GUIBtnMultiplayer.png" LogicalName="OstranautsMP.GUIBtnMultiplayer.png" />
+		<EmbeddedResource Include="res\GUIBtnMultiplayerIn.png" LogicalName="OstranautsMP.GUIBtnMultiplayerIn.png" />
+		<Reference Include="mscorlib"><HintPath>$(Managed)\mscorlib.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="System"><HintPath>$(Managed)\System.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="System.Core"><HintPath>$(Managed)\System.Core.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="netstandard"><HintPath>$(Managed)\netstandard.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="UnityEngine"><HintPath>$(Managed)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="UnityEngine.CoreModule"><HintPath>$(Managed)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="UnityEngine.IMGUIModule"><HintPath>$(Managed)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(Managed)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="UnityEngine.UI"><HintPath>$(Managed)\UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="UnityEngine.UIModule"><HintPath>$(Managed)\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(Managed)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="Assembly-CSharp"><HintPath>$(Managed)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(Managed)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="UnityEngine.PhysicsModule"><HintPath>$(Managed)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="Unity.InputSystem"><HintPath>$(Managed)\Unity.InputSystem.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="Unity.TextMeshPro"><HintPath>$(Managed)\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="BepInEx"><HintPath>$(BepInExCore)\BepInEx.dll</HintPath><Private>false</Private></Reference>
+		<Reference Include="0Harmony"><HintPath>$(BepInExCore)\0Harmony.dll</HintPath><Private>false</Private></Reference>
+	</ItemGroup>
+
+</Project>

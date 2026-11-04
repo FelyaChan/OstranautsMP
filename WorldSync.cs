@@ -1,0 +1,379 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
+using HarmonyLib;
+using UnityEngine;
+
+namespace OstranautsMP
+{
+	// Host-authoritative pause, time scale, game time and character positions.
+	//
+	// Protocol (host -> client):
+	//   TIME <paused 0|1> <timeScale> <epoch>          on change and every second
+	//   POS <id>,<x>,<y>,<rotZ>,<anim>;...              10 times per second
+	//   CONDS ...                                       see CondSync
+	// Protocol (client -> host):
+	//   READY                                           client finished loading into the game
+	//
+	// The client keeps running its own simulation; positions and animation state are overridden in LateUpdate,
+	// after the game's Pathfinder has moved everyone for the frame.
+	public static class WorldSync
+	{
+		private const float PosInterval = 0.1f;
+
+		private const float TimeInterval = 1f;
+
+		// Further than this the client snaps instead of smoothing.
+		private const float SnapDistance = 3f;
+
+		// Smoothing rate toward the latest host position, per second.
+		private const float Smoothing = 15f;
+
+		// Drop a target that the host has stopped sending (left the loaded ships, despawned).
+		private const float TargetTimeout = 2f;
+
+		// Game-time difference (seconds) the client tolerates before jumping to the host's time, plus a share of the time scale.
+		private const double EpochToleranceBase = 1.0;
+
+		private const double EpochTolerancePerScale = 0.25;
+
+		private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+		// Destination footprints; a child of the character, so moving the character would drag them along.
+		private static readonly System.Reflection.FieldInfo PathMarker = AccessTools.Field(typeof(Pathfinder), "goPath");
+
+		private struct Target
+		{
+			public Vector2 Pos;
+
+			public float Rot;
+
+			// Animator "AnimState" value on the host; -1 if the host has no animator for this character.
+			public int Anim;
+
+			public float Time;
+		}
+
+		private static readonly Dictionary<string, Target> Targets = new Dictionary<string, Target>();
+
+		private static readonly List<string> Stale = new List<string>();
+
+		private static readonly HashSet<string> SeenIds = new HashSet<string>();
+
+		private static readonly StringBuilder Sb = new StringBuilder();
+
+		private static float _nextPos;
+
+		private static float _nextTime;
+
+		private static bool _sentPaused;
+
+		private static float _sentScale = -1f;
+
+		private static bool _hasHostTime;
+
+		private static bool _hostPaused;
+
+		private static float _hostScale = 1f;
+
+		// Client: whether we were in the game last frame, to send READY once per load.
+		private static bool _wasInGame;
+
+		// True while we apply host state, so our own prefixes let the call through.
+		private static bool _applying;
+
+		public static void Patch(Harmony harmony)
+		{
+			HarmonyMethod block = new HarmonyMethod(typeof(WorldSync), nameof(BlockOnClientPrefix));
+			harmony.Patch(AccessTools.PropertySetter(typeof(CrewSim), "Paused"), prefix: block);
+			harmony.Patch(AccessTools.Method(typeof(CrewSim), "TimeScaleMult"), prefix: block);
+			harmony.Patch(AccessTools.Method(typeof(CrewSim), "ResetTimeScale"), prefix: block);
+			harmony.Patch(AccessTools.Method(typeof(CondOwner), "SetAnimState"), prefix: new HarmonyMethod(typeof(WorldSync), nameof(SetAnimStatePrefix)));
+		}
+
+		// Client: whatever the local simulation wants to play (its Pathfinder sets Walk every frame while it thinks the
+		// character walks), a host-synced person plays the host's animation. Done here rather than in LateUpdate,
+		// because by LateUpdate the animator has already evaluated the frame.
+		private static void SetAnimStatePrefix(CondOwner __instance, ref int nState)
+		{
+			Target t;
+			if (Plugin.Net.CurrentMode == NetSession.Mode.Client && __instance.strID != null && Targets.TryGetValue(__instance.strID, out t) && t.Anim >= 0)
+			{
+				nState = t.Anim;
+			}
+		}
+
+		// The client can't change pause or time scale; only the host's state is applied.
+		private static bool BlockOnClientPrefix()
+		{
+			return _applying || !ClientFollowsHost;
+		}
+
+		internal static bool ClientFollowsHost => Plugin.Net.CurrentMode == NetSession.Mode.Client && Plugin.Net.Connected && _hasHostTime;
+
+		internal static bool InGame => CrewSim.objInstance != null && CrewSim.objInstance.FinishedLoading && !CrewSim.bShipEdit;
+
+		public static void Update(float now)
+		{
+			NetSession net = Plugin.Net;
+			if (!net.Connected)
+			{
+				_hasHostTime = false;
+				_wasInGame = false;
+				Targets.Clear();
+				_sentScale = -1f;
+				CondSync.ResetSnapshot();
+				return;
+			}
+			bool inGame = InGame;
+			if (net.CurrentMode == NetSession.Mode.Client)
+			{
+				if (inGame && !_wasInGame)
+				{
+					net.Send("READY");
+					ItemSync.ResetKnown();
+					Plugin.Log.LogInfo("In game, sent READY");
+				}
+				_wasInGame = inGame;
+			}
+			if (!inGame)
+			{
+				return;
+			}
+			if (net.CurrentMode == NetSession.Mode.Host)
+			{
+				HostSendTime(now);
+				if (now >= _nextPos)
+				{
+					_nextPos = now + PosInterval;
+					HostSendPositions();
+				}
+				CondSync.HostUpdate(now);
+			}
+			else if (net.CurrentMode == NetSession.Mode.Client && _hasHostTime)
+			{
+				ClientApplyTime();
+			}
+		}
+
+		public static void LateUpdate(float now, float dt)
+		{
+			if (Plugin.Net.CurrentMode != NetSession.Mode.Client || !Plugin.Net.Connected || !InGame)
+			{
+				return;
+			}
+			float k = 1f - Mathf.Exp((0f - Smoothing) * dt);
+			foreach (KeyValuePair<string, Target> item in Targets)
+			{
+				if (now - item.Value.Time > TargetTimeout)
+				{
+					Stale.Add(item.Key);
+					continue;
+				}
+				CondOwner co;
+				if (!DataHandler.mapCOs.TryGetValue(item.Key, out co) || co == null || co.bDestroyed || co.tf == null)
+				{
+					continue;
+				}
+				// Keep the footprints where the Pathfinder put them this frame.
+				GameObject marker = (co.Pathfinder != null) ? (PathMarker.GetValue(co.Pathfinder) as GameObject) : null;
+				bool hasMarker = marker != null && marker.activeSelf;
+				Vector3 markerPos = hasMarker ? marker.transform.position : Vector3.zero;
+				Quaternion markerRot = hasMarker ? marker.transform.rotation : Quaternion.identity;
+				Vector3 p = co.tf.position;
+				Vector2 cur = new Vector2(p.x, p.y);
+				Vector2 next = (Vector2.Distance(cur, item.Value.Pos) > SnapDistance) ? item.Value.Pos : Vector2.Lerp(cur, item.Value.Pos, k);
+				co.tf.position = new Vector3(next.x, next.y, p.z);
+				float rot = Mathf.LerpAngle(co.tf.rotation.eulerAngles.z, item.Value.Rot, k);
+				co.tf.rotation = Quaternion.AngleAxis(rot, Vector3.forward);
+				if (hasMarker)
+				{
+					marker.transform.position = markerPos;
+					marker.transform.rotation = markerRot;
+				}
+				// Only on change, so the animator isn't restarted every frame.
+				if (item.Value.Anim >= 0 && co.GetAnimState() != item.Value.Anim)
+				{
+					co.SetAnimState(item.Value.Anim);
+				}
+			}
+			foreach (string id in Stale)
+			{
+				Targets.Remove(id);
+			}
+			Stale.Clear();
+		}
+
+		// Main thread. Returns false if the message isn't ours.
+		public static bool OnMessage(string cmd, string arg, float now)
+		{
+			NetSession.Mode mode = Plugin.Net.CurrentMode;
+			switch (cmd)
+			{
+				case "TIME":
+					if (mode == NetSession.Mode.Client)
+					{
+						ParseTime(arg);
+					}
+					return true;
+				case "POS":
+					if (mode == NetSession.Mode.Client)
+					{
+						ParsePositions(arg, now);
+					}
+					return true;
+				case "CONDS":
+					if (mode == NetSession.Mode.Client && InGame)
+					{
+						CondSync.Apply(arg);
+					}
+					return true;
+				case "READY":
+					if (mode == NetSession.Mode.Host)
+					{
+						// The client has just loaded a save; send it everyone's conditions again.
+						CondSync.ResetSnapshot();
+						SaveSync.ResetLocation();
+						ShipSync.OnClientReady();
+						PlayerInteractions.ResetReplies();
+						Plugin.Log.LogInfo("Client is in game");
+					}
+					return true;
+				default:
+					return false;
+			}
+		}
+
+		private static void HostSendTime(float now)
+		{
+			bool paused = CrewSim.Paused;
+			float scale = Time.timeScale;
+			if (paused != _sentPaused || scale != _sentScale || now >= _nextTime)
+			{
+				_nextTime = now + TimeInterval;
+				_sentPaused = paused;
+				_sentScale = scale;
+				Plugin.Net.Send("TIME " + (paused ? "1" : "0") + " " + scale.ToString("R", Inv) + " " + StarSystem.fEpoch.ToString("R", Inv));
+			}
+		}
+
+		private static void HostSendPositions()
+		{
+			List<Ship> ships = CrewSim.GetAllLoadedShips();
+			if (ships == null)
+			{
+				return;
+			}
+			Sb.Length = 0;
+			SeenIds.Clear();
+			foreach (Ship ship in ships)
+			{
+				if (ship == null || ship.bDestroyed)
+				{
+					continue;
+				}
+				foreach (CondOwner co in ship.GetPeople(bAllowDocked: false))
+				{
+					if (co == null || co.bDestroyed || co.tf == null || co.strID == null || !SeenIds.Add(co.strID))
+					{
+						continue;
+					}
+					Vector3 p = co.tf.position;
+					if (Sb.Length > 0)
+					{
+						Sb.Append(';');
+					}
+					Sb.Append(co.strID).Append(',');
+					Sb.Append(p.x.ToString("0.###", Inv)).Append(',');
+					Sb.Append(p.y.ToString("0.###", Inv)).Append(',');
+					Sb.Append(co.tf.rotation.eulerAngles.z.ToString("0.#", Inv)).Append(',');
+					Sb.Append(co.GetAnimState().ToString(Inv));
+				}
+			}
+			if (Sb.Length > 0)
+			{
+				Plugin.Net.Send("POS " + Sb);
+			}
+		}
+
+		private static void ParseTime(string arg)
+		{
+			string[] parts = arg.Split(' ');
+			float scale;
+			double epoch;
+			if (parts.Length != 3 || !float.TryParse(parts[1], NumberStyles.Float, Inv, out scale) || !double.TryParse(parts[2], NumberStyles.Float, Inv, out epoch))
+			{
+				return;
+			}
+			_hostPaused = parts[0] == "1";
+			_hostScale = scale;
+			_hasHostTime = true;
+			if (InGame)
+			{
+				CorrectEpoch(epoch);
+			}
+		}
+
+		// Jump to the host's game time when the client has drifted too far. The host's value is about half a ping old.
+		private static void CorrectEpoch(double hostEpoch)
+		{
+			if (!_hostPaused && Plugin.Net.LastRttMs > 0)
+			{
+				hostEpoch += Plugin.Net.LastRttMs / 2000.0 * _hostScale;
+			}
+			double offset = hostEpoch - StarSystem.fEpoch;
+			if (Math.Abs(offset) > EpochToleranceBase + EpochTolerancePerScale * _hostScale)
+			{
+				StarSystem.fEpoch = hostEpoch;
+				Plugin.Log.LogInfo("Game time corrected by " + offset.ToString("0.00", Inv) + " s");
+			}
+		}
+
+		private static void ParsePositions(string arg, float now)
+		{
+			foreach (string entry in arg.Split(';'))
+			{
+				string[] f = entry.Split(',');
+				float x;
+				float y;
+				float r;
+				int a;
+				if (f.Length == 5 && float.TryParse(f[1], NumberStyles.Float, Inv, out x) && float.TryParse(f[2], NumberStyles.Float, Inv, out y) && float.TryParse(f[3], NumberStyles.Float, Inv, out r) && int.TryParse(f[4], NumberStyles.Integer, Inv, out a))
+				{
+					Target t;
+					t.Pos = new Vector2(x, y);
+					t.Rot = r;
+					t.Anim = a;
+					t.Time = now;
+					Targets[f[0]] = t;
+				}
+			}
+		}
+
+		private static void ClientApplyTime()
+		{
+			_applying = true;
+			try
+			{
+				if (CrewSim.Paused != _hostPaused)
+				{
+					CrewSim.Paused = _hostPaused;
+				}
+				if (Time.timeScale != _hostScale)
+				{
+					Time.timeScale = _hostScale;
+					CrewSim.OnTimeScaleUpdated.Invoke();
+				}
+			}
+			catch (Exception e)
+			{
+				Plugin.Log.LogError("Applying host time failed: " + e.Message);
+			}
+			finally
+			{
+				_applying = false;
+			}
+		}
+	}
+}
