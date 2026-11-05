@@ -7,6 +7,8 @@ A client-server multiplayer mod for **Ostranauts** utilizing an authoritative li
 Made for Ostranauts v1.0.1.8a  
 Not been tested on more recent builds.
 
+📜 **[Changelog](CHANGELOG.md)** — what changed in each version.
+
 ## How it works
 * **Authoritative Host:** The host manages game logic, simulation, and world state. The client's world mirrors the host's.
 * **Direct Connect:** Connection is established via TCP/IP directly between players.
