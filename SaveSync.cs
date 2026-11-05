@@ -166,6 +166,13 @@ namespace OstranautsMP
 				_locPending = null;
 				return;
 			}
+			// Apart (the client's place keeps running on its side), or back where the client is: nothing to resend.
+			if (Apart.HostActive || Apart.ClientIsAt(sig))
+			{
+				_locBaseline = sig;
+				_locPending = null;
+				return;
+			}
 			if (sig != _locPending)
 			{
 				_locPending = sig;

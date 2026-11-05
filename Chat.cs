@@ -20,7 +20,9 @@ namespace OstranautsMP
 	// from the worst condition they show (the game's own Good / Badish / Bad / BadVery colour classes).
 	//
 	// Protocol: NAME <name>; CHAT <characterID>|<epoch>|<text> (characterID and epoch empty when not in game);
-	// MARK <x>|<y>|<characterID>|<base64 label>. A ping on a person or an item sits on it and names it.
+	// MARK <x>|<y>|<characterID>|<base64 label>|<colour hex>|<target person ID>. The ping sits where the mouse was; if
+	// that was over an item, it names it. Over a person, it names them and rings them, following them while it lasts. Each player picks their ping colour in the Multiplayer window.
+	// "/me text" in chat is a role-play action: shown as "* <character name> text", in the bubble in italics.
 	public static class Chat
 	{
 		private const string AppName = "mpchat";
@@ -47,6 +49,9 @@ namespace OstranautsMP
 			public string Text;
 
 			public bool System;
+
+			// "/me": Name is the character's name, Text the action.
+			public bool Action;
 		}
 
 		private struct Bubble
@@ -56,6 +61,8 @@ namespace OstranautsMP
 			public string Name;
 
 			public string Text;
+
+			public bool Action;
 
 			public float Start;
 
@@ -72,6 +79,13 @@ namespace OstranautsMP
 
 			// What was pointed at (empty for a bare spot).
 			public string Label;
+
+			public Color Color;
+
+			// The person the ping rings, or null.
+			public string TargetId;
+
+			public float Start;
 
 			public float Until;
 		}
@@ -176,9 +190,7 @@ namespace OstranautsMP
 					{
 						epoch = double.NaN;
 					}
-					string from = (PeerName != null) ? PeerName : "Player";
-					AddLine(from, f[2], epoch, false);
-					AddBubble(f[0], from, f[2]);
+					AddChat(f[0], (PeerName != null) ? PeerName : "Player", f[2], epoch);
 					return true;
 				}
 				case "MARK":
@@ -199,7 +211,13 @@ namespace OstranautsMP
 							{
 							}
 						}
-						AddMark(new Vector3(x, y, 0f), (PeerName != null) ? PeerName : "Player", f[2], label);
+						Color color = new Color(1f, 0.85f, 0.2f);
+						Color parsed;
+						if (f.Length >= 5 && ColorUtility.TryParseHtmlString("#" + f[4], out parsed))
+						{
+							color = parsed;
+						}
+						AddMark(new Vector3(x, y, 0f), (PeerName != null) ? PeerName : "Player", f[2], label, color, (f.Length >= 6) ? f[5] : null);
 					}
 					return true;
 				}
@@ -215,6 +233,11 @@ namespace OstranautsMP
 			{
 				return;
 			}
+			if (text.Equals("/sync", StringComparison.OrdinalIgnoreCase))
+			{
+				Apart.SyncCommand();
+				return;
+			}
 			CondOwner me = MyCharacter();
 			double epoch = WorldSync.InGame ? StarSystem.fEpoch : double.NaN;
 			string id = (me != null) ? me.strID : "";
@@ -226,8 +249,34 @@ namespace OstranautsMP
 			{
 				AddSystem("Not connected");
 			}
-			AddLine(Plugin.PlayerName, text, epoch, false);
-			AddBubble(id, Plugin.PlayerName, text);
+			AddChat(id, Plugin.PlayerName, text, epoch);
+		}
+
+		// A chat line and bubble; "/me ..." becomes an action of the speaker's character.
+		private static void AddChat(string characterId, string player, string text, double epoch)
+		{
+			string rest;
+			if (IsAction(text, out rest))
+			{
+				CondOwner co;
+				string actor = (!string.IsNullOrEmpty(characterId) && DataHandler.mapCOs.TryGetValue(characterId, out co) && co != null && !string.IsNullOrEmpty(co.strName)) ? co.strName : player;
+				AddLine(actor, rest, epoch, false, action: true);
+				AddBubble(characterId, actor, rest, action: true);
+				return;
+			}
+			AddLine(player, text, epoch, false);
+			AddBubble(characterId, player, text);
+		}
+
+		private static bool IsAction(string text, out string rest)
+		{
+			rest = null;
+			if (text.Length > 4 && text.StartsWith("/me ", StringComparison.OrdinalIgnoreCase))
+			{
+				rest = text.Substring(4).Trim();
+				return rest.Length > 0;
+			}
+			return false;
 		}
 
 		// The character this player speaks as: the host's main character, or the client's claimed crew member.
@@ -249,14 +298,15 @@ namespace OstranautsMP
 			return (s ?? "").Replace('\n', ' ').Replace('\r', ' ');
 		}
 
-		private static void AddSystem(string text)
+		internal static void AddSystem(string text)
 		{
 			AddLine(null, text, WorldSync.InGame ? StarSystem.fEpoch : double.NaN, true);
 		}
 
-		private static void AddLine(string name, string text, double epoch, bool system)
+		private static void AddLine(string name, string text, double epoch, bool system, bool action = false)
 		{
 			Line l;
+			l.Action = action;
 			l.Epoch = epoch;
 			l.Clock = DateTime.Now.ToString("HH:mm");
 			l.Name = name;
@@ -269,7 +319,7 @@ namespace OstranautsMP
 			}
 			Version++;
 			_scrollToEnd = true;
-			Plugin.Log.LogInfo("[Chat] " + (system ? "* " : (name + ": ")) + text);
+			Plugin.Log.LogInfo("[Chat] " + (system ? "* " : (action ? ("* " + name + " ") : (name + ": "))) + text);
 		}
 
 		// The last <max> lines; in game with the in-game time they were sent at (real time for lines sent from menus).
@@ -285,12 +335,12 @@ namespace OstranautsMP
 					sb.Append('\n');
 				}
 				sb.Append('[').Append(stamp).Append("] ");
-				sb.Append(l.System ? ("* " + l.Text) : (l.Name + ": " + l.Text));
+				sb.Append(l.System ? ("* " + l.Text) : (l.Action ? ("* " + l.Name + " " + l.Text) : (l.Name + ": " + l.Text)));
 			}
 			return sb.ToString();
 		}
 
-		private static void AddBubble(string characterId, string name, string text)
+		private static void AddBubble(string characterId, string name, string text, bool action = false)
 		{
 			if (string.IsNullOrEmpty(characterId))
 			{
@@ -301,19 +351,23 @@ namespace OstranautsMP
 			nb.CharacterId = characterId;
 			nb.Name = name;
 			nb.Text = text;
+			nb.Action = action;
 			nb.Start = Time.unscaledTime;
 			nb.Until = nb.Start + (name.Length + 2 + text.Length) / TypeCharsPerSecond + BubbleSeconds;
 			Bubbles.Add(nb);
 		}
 
-		private static void AddMark(Vector3 pos, string name, string characterId, string label)
+		private static void AddMark(Vector3 pos, string name, string characterId, string label, Color color, string targetId = null)
 		{
 			Marks.RemoveAll((Mark m) => m.Name == name);
 			Mark mk;
 			mk.Pos = pos;
+			mk.TargetId = string.IsNullOrEmpty(targetId) ? null : targetId;
 			mk.Name = name;
 			mk.CharacterId = characterId;
 			mk.Label = label ?? "";
+			mk.Color = color;
+			mk.Start = Time.unscaledTime;
 			mk.Until = Time.unscaledTime + MarkSeconds;
 			Marks.Add(mk);
 		}
@@ -509,7 +563,7 @@ namespace OstranautsMP
 				_bubbleStyle = new GUIStyle(GUI.skin.box);
 				_bubbleStyle.wordWrap = true;
 				_bubbleStyle.alignment = TextAnchor.MiddleCenter;
-				_bubbleStyle.fontSize = 14;
+				_bubbleStyle.fontSize = 18;
 				_bubbleStyle.normal.textColor = Color.white;
 				_bubbleStyle.richText = true;
 			}
@@ -519,7 +573,7 @@ namespace OstranautsMP
 				_speechStyle.wordWrap = true;
 				_speechStyle.richText = true;
 				_speechStyle.alignment = TextAnchor.UpperLeft;
-				_speechStyle.fontSize = 14;
+				_speechStyle.fontSize = 18;
 				_speechStyle.normal.textColor = Color.white;
 				_speechStyle.padding = new RectOffset(8, 8, 5, 5);
 			}
@@ -527,7 +581,9 @@ namespace OstranautsMP
 			{
 				_markStyle = new GUIStyle(GUI.skin.label);
 				_markStyle.alignment = TextAnchor.MiddleCenter;
-				_markStyle.fontSize = 13;
+				_markStyle.fontSize = 18;
+				_markStyle.richText = true;
+				_markStyle.wordWrap = true;
 				_markStyle.fontStyle = FontStyle.Bold;
 				_markStyle.normal.textColor = Color.white;
 			}
@@ -582,8 +638,9 @@ namespace OstranautsMP
 				// Sized for the whole message, so the bubble doesn't grow while it's being typed.
 				string name = NoTags(b.Name);
 				string text = NoTags(b.Text);
-				GUIContent full = new GUIContent("<b>" + name + "</b>: " + text);
-				float w = Mathf.Min(280f, _speechStyle.CalcSize(full).x + 4f);
+				string sep = b.Action ? " " : ": ";
+				GUIContent full = new GUIContent((b.Action ? "<i>" : "") + "<b>" + name + "</b>" + sep + text + (b.Action ? "</i>" : ""));
+				float w = Mathf.Min(380f, _speechStyle.CalcSize(full).x + 4f);
 				float h = _speechStyle.CalcHeight(full, w);
 				Rect r = onScreen ? new Rect(target.x - w / 2f, target.y - h - 6f, w, h) : EdgeRect(target, w, h, Color.white);
 				// Typewriter: the first n characters of "Name: text".
@@ -596,8 +653,12 @@ namespace OstranautsMP
 				}
 				else
 				{
-					int t = Mathf.Min(b.Text.Length, n - b.Name.Length - 2);
-					shown = color + name + "</b></color>:" + ((t >= 0) ? (" " + NoTags(b.Text.Substring(0, t))) : "");
+					int t = Mathf.Min(b.Text.Length, n - b.Name.Length - sep.Length);
+					shown = color + name + "</b></color>" + sep.TrimEnd() + ((t >= 0) ? (" " + NoTags(b.Text.Substring(0, t))) : "");
+				}
+				if (b.Action)
+				{
+					shown = "<i>" + shown + "</i>";
 				}
 				GUI.Box(r, shown, _speechStyle);
 			}
@@ -611,30 +672,168 @@ namespace OstranautsMP
 			{
 				return;
 			}
-			Color gold = new Color(1f, 0.85f, 0.2f);
 			foreach (Mark m in Marks)
 			{
+				float age = Time.unscaledTime - m.Start;
+				// Fades out over its last second.
+				float fade = Mathf.Clamp01(m.Until - Time.unscaledTime);
+				Color c = m.Color;
+				c.a = fade;
+				string text = "<color=#" + StateColorHex(m.CharacterId) + "><b>" + NoTags(m.Name) + "</b></color>" + ((m.Label.Length > 0) ? (": " + NoTags(m.Label)) : "");
+				GUIContent content = new GUIContent(text);
+				float tw = Mathf.Min(420f, _markStyle.CalcSize(content).x + 12f);
+				float th = _markStyle.CalcHeight(content, tw) + 4f;
 				Vector2 p;
-				bool onScreen = ToScreen(cam, m.Pos, out p);
-				if (onScreen)
+				CondOwner target = MarkTarget(m);
+				Vector3 at = (target != null) ? target.tf.position : m.Pos;
+				bool onScreen = ToScreen(cam, at, out p);
+				if (onScreen && target != null)
 				{
-					// A pulsing diamond with the player's name under it.
-					float s = 10f + 3f * Mathf.Sin(Time.unscaledTime * 6f);
-					DrawLine(new Vector2(p.x - s, p.y), new Vector2(p.x, p.y - s), 3f, gold);
-					DrawLine(new Vector2(p.x, p.y - s), new Vector2(p.x + s, p.y), 3f, gold);
-					DrawLine(new Vector2(p.x + s, p.y), new Vector2(p.x, p.y + s), 3f, gold);
-					DrawLine(new Vector2(p.x, p.y + s), new Vector2(p.x - s, p.y), 3f, gold);
-					Color savedColor = GUI.color;
-					GUI.color = HexColor(StateColorHex(m.CharacterId));
-					GUI.Label(new Rect(p.x - 120f, p.y + 14f, 240f, 20f), (m.Label.Length > 0) ? (m.Name + ": " + m.Label) : m.Name, _markStyle);
-					GUI.color = savedColor;
+					// A person: a ring around them, rippling out, the label under it.
+					Vector2 edge;
+					ToScreen(cam, at + Vector3.right * PersonRadius(target), out edge);
+					float r = Mathf.Max(14f, (edge - p).magnitude);
+					float pop = 1f + 0.6f * Mathf.Clamp01(1f - age / 0.3f);
+					for (int k = 0; k < 2; k++)
+					{
+						float phase = (age * 0.9f + k * 0.5f) % 1f;
+						Color rc = c;
+						rc.a = fade * (1f - phase) * 0.8f;
+						DrawCircle(p, r + 30f * phase, 2f, rc);
+					}
+					float ring = r * pop + 1.5f * Mathf.Sin(age * 6f);
+					Color shadow = new Color(0f, 0f, 0f, 0.6f * fade);
+					DrawCircle(p + new Vector2(2f, 2f), ring, 4f, shadow);
+					DrawCircle(p, ring, 4f, c);
+					Rect label = new Rect(p.x - tw / 2f, p.y + ring + 8f, tw, th);
+					DrawBox(label, new Color(0f, 0f, 0f, 0.6f * fade));
+					DrawBox(new Rect(label.x, label.y, 3f, label.height), c);
+					Color saved = GUI.color;
+					GUI.color = new Color(1f, 1f, 1f, fade);
+					GUI.Label(label, content, _markStyle);
+					GUI.color = saved;
+				}
+				else if (onScreen)
+				{
+					// Pops in, then pulses, with two rings rippling out.
+					float pop = 1f + 1.2f * Mathf.Clamp01(1f - age / 0.3f);
+					for (int k = 0; k < 2; k++)
+					{
+						float phase = (age * 0.9f + k * 0.5f) % 1f;
+						Color rc = c;
+						rc.a = fade * (1f - phase) * 0.8f;
+						DrawCircle(p, 10f + 46f * phase, 3f, rc);
+					}
+					float s = (14f + 3f * Mathf.Sin(age * 6f)) * pop;
+					Color shadow = new Color(0f, 0f, 0f, 0.6f * fade);
+					DrawDiamond(p + new Vector2(2f, 2f), s, 5f, shadow);
+					DrawDiamond(p, s, 5f, c);
+					DrawBox(new Rect(p.x - 3f, p.y - 3f, 6f, 6f), c);
+					Rect label = new Rect(p.x - tw / 2f, p.y + s + 8f, tw, th);
+					DrawBox(label, new Color(0f, 0f, 0f, 0.6f * fade));
+					DrawBox(new Rect(label.x, label.y, 3f, label.height), c);
+					Color saved = GUI.color;
+					GUI.color = new Color(1f, 1f, 1f, fade);
+					GUI.Label(label, content, _markStyle);
+					GUI.color = saved;
 				}
 				else
 				{
-					Rect r = EdgeRect(p, (m.Label.Length > 0) ? 220f : 120f, 24f, gold);
-					GUI.Box(r, "◆ <color=#" + StateColorHex(m.CharacterId) + ">" + NoTags(m.Name) + "</color>" + ((m.Label.Length > 0) ? (": " + NoTags(m.Label)) : ""), _bubbleStyle);
+					Rect r = EdgeRect(p, tw + 24f, th, c);
+					DrawBox(r, new Color(0f, 0f, 0f, 0.6f * fade));
+					DrawBox(new Rect(r.x, r.y, 3f, r.height), c);
+					Color saved = GUI.color;
+					GUI.color = new Color(1f, 1f, 1f, fade);
+					GUI.Label(new Rect(r.x + 12f, r.y, r.width - 12f, r.height), content, _markStyle);
+					GUI.color = saved;
 				}
 			}
+		}
+
+		// The person a ping follows, while they're here and shown.
+		private static CondOwner MarkTarget(Mark m)
+		{
+			CondOwner co;
+			if (m.TargetId != null && DataHandler.mapCOs.TryGetValue(m.TargetId, out co) && co != null && !co.bDestroyed && co.tf != null && co.ship != null && co.Visible)
+			{
+				return co;
+			}
+			return null;
+		}
+
+		// Half the person's drawn size, in world units.
+		private static float PersonRadius(CondOwner co)
+		{
+			Renderer r = co.GetComponent<Renderer>();
+			if (r == null)
+			{
+				return 0.5f;
+			}
+			Vector3 e = r.bounds.extents;
+			return Mathf.Max(e.x, e.y);
+		}
+
+		// The person drawn under this world point, if any (nearest centre wins).
+		private static CondOwner PersonAt(Vector3 w, CondOwner me)
+		{
+			List<Ship> ships = CrewSim.GetAllLoadedShips();
+			if (ships == null)
+			{
+				return null;
+			}
+			CondOwner best = null;
+			float bestD = float.MaxValue;
+			foreach (Ship ship in ships)
+			{
+				if (ship == null || ship.bDestroyed)
+				{
+					continue;
+				}
+				foreach (CondOwner co in ship.GetPeople(bAllowDocked: false))
+				{
+					if (co == null || co.bDestroyed || co == me || co.tf == null || !co.Visible)
+					{
+						continue;
+					}
+					Vector2 d = new Vector2(w.x - co.tf.position.x, w.y - co.tf.position.y);
+					float radius = PersonRadius(co);
+					if (d.magnitude <= radius && d.magnitude < bestD)
+					{
+						best = co;
+						bestD = d.magnitude;
+					}
+				}
+			}
+			return best;
+		}
+
+		private static void DrawDiamond(Vector2 p, float s, float width, Color color)
+		{
+			DrawLine(new Vector2(p.x - s, p.y), new Vector2(p.x, p.y - s), width, color);
+			DrawLine(new Vector2(p.x, p.y - s), new Vector2(p.x + s, p.y), width, color);
+			DrawLine(new Vector2(p.x + s, p.y), new Vector2(p.x, p.y + s), width, color);
+			DrawLine(new Vector2(p.x, p.y + s), new Vector2(p.x - s, p.y), width, color);
+		}
+
+		private static void DrawCircle(Vector2 p, float radius, float width, Color color)
+		{
+			const int segments = 24;
+			Vector2 prev = p + new Vector2(radius, 0f);
+			for (int i = 1; i <= segments; i++)
+			{
+				float a = i * Mathf.PI * 2f / segments;
+				Vector2 next = p + new Vector2(Mathf.Cos(a) * radius, Mathf.Sin(a) * radius);
+				DrawLine(prev, next, width, color);
+				prev = next;
+			}
+		}
+
+		private static void DrawBox(Rect r, Color color)
+		{
+			Color saved = GUI.color;
+			GUI.color = color;
+			GUI.DrawTexture(r, _white);
+			GUI.color = saved;
 		}
 
 		private static Color HexColor(string hex)
@@ -747,19 +946,29 @@ namespace OstranautsMP
 					Vector3 w = cam.ScreenToWorldPoint(new Vector3(m.x, m.y, 0f - cam.transform.position.z));
 					CondOwner me = MyCharacter();
 					string id = (me != null) ? me.strID : "";
-					// Pointing at a person or an item: the ping sits on it and names it.
+					// Where the mouse is; over a person or an item, the ping names it.
 					Vector3 at = new Vector3(w.x, w.y, 0f);
 					string label = "";
-					CondOwner thing = PointedAt(me);
-					if (thing != null && thing.tf != null)
+					string target = "";
+					CondOwner person = PersonAt(at, me);
+					if (person != null)
 					{
-						at = new Vector3(thing.tf.position.x, thing.tf.position.y, 0f);
-						label = thing.FriendlyName ?? "";
+						label = person.FriendlyName ?? "";
+						target = person.strID;
+						at = new Vector3(person.tf.position.x, person.tf.position.y, 0f);
 					}
-					AddMark(at, Plugin.PlayerName, id, label);
+					else
+					{
+						CondOwner thing = PointedAt(me);
+						if (thing != null)
+						{
+							label = thing.FriendlyName ?? "";
+						}
+					}
+					AddMark(at, Plugin.PlayerName, id, label, Plugin.MarkColor, target);
 					if (Plugin.Net.Connected)
 					{
-						Plugin.Net.Send("MARK " + at.x.ToString("R", Inv) + "|" + at.y.ToString("R", Inv) + "|" + id + "|" + Convert.ToBase64String(Encoding.UTF8.GetBytes(label)));
+						Plugin.Net.Send("MARK " + at.x.ToString("R", Inv) + "|" + at.y.ToString("R", Inv) + "|" + id + "|" + Convert.ToBase64String(Encoding.UTF8.GetBytes(label)) + "|" + Plugin.MarkColorHex + "|" + target);
 					}
 				}
 			}

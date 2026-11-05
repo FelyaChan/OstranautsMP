@@ -531,7 +531,8 @@ namespace OstranautsMP
 		private static void TradePrefix(GUITrade __instance, out TradeState __state)
 		{
 			__state = null;
-			if (!IsClient)
+			// Apart from the host the trade only happens here; the money comes along with the place (Apart).
+			if (!IsClient || Apart.ClientActive)
 			{
 				return;
 			}

@@ -120,7 +120,7 @@ namespace OstranautsMP
 
 		private static bool _dataReady;
 
-		private static JsonInteraction Make(string name, string title, string anim, bool social, string group, string themType, params string[] inverse)
+		internal static JsonInteraction Make(string name, string title, string anim, bool social, string group, string themType, params string[] inverse)
 		{
 			JsonInteraction template;
 			if (!DataHandler.dictInteractions.TryGetValue("SOCBlank", out template))
@@ -532,7 +532,7 @@ namespace OstranautsMP
 		// The client shows the host's reply threads only.
 		private static bool AddReplyThreadPrefix()
 		{
-			return _applyingReplies || !(WorldSync.ClientFollowsHost && WorldSync.InGame);
+			return _applyingReplies || !(WorldSync.ClientFollowsHost && WorldSync.InGame) || Apart.ClientActive;
 		}
 
 		// Called from Plugin.Update.

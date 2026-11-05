@@ -15,6 +15,7 @@ namespace OstranautsMP
 	//   CONDS ...                                       see CondSync
 	// Protocol (client -> host):
 	//   READY                                           client finished loading into the game
+	//   PAUSE <1|0>                                     the client pressed the pause key
 	//
 	// The client keeps running its own simulation; positions and animation state are overridden in LateUpdate,
 	// after the game's Pathfinder has moved everyone for the frame.
@@ -90,6 +91,7 @@ namespace OstranautsMP
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "TimeScaleMult"), prefix: block);
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "ResetTimeScale"), prefix: block);
 			harmony.Patch(AccessTools.Method(typeof(CondOwner), "SetAnimState"), prefix: new HarmonyMethod(typeof(WorldSync), nameof(SetAnimStatePrefix)));
+			harmony.Patch(AccessTools.Method(typeof(Ostranauts.InputControl.CommandPause), "Execute"), prefix: new HarmonyMethod(typeof(WorldSync), nameof(PauseKeyPrefix)));
 		}
 
 		// Client: whatever the local simulation wants to play (its Pathfinder sets Walk every frame while it thinks the
@@ -102,6 +104,22 @@ namespace OstranautsMP
 			{
 				nState = t.Anim;
 			}
+		}
+
+		// Client: the pause key (Space) asks the host to pause or unpause for both. Only the key: windows that pause the
+		// game on their own (GUIData.bPausesGame) still don't reach the host.
+		private static bool PauseKeyPrefix()
+		{
+			if (!ClientFollowsHost || !InGame)
+			{
+				return true;
+			}
+			if (CanvasManager.instance != null && CanvasManager.instance.State != CanvasManager.GUIState.GAMEOVER && !CrewSim.Typing)
+			{
+				Plugin.Net.Send("PAUSE " + (_hostPaused ? "0" : "1"));
+				AudioManager.am.PlayAudioEmitter("UIPauseBtnOut", bLoop: false);
+			}
+			return false;
 		}
 
 		// The client can't change pause or time scale; only the host's state is applied.
@@ -133,6 +151,7 @@ namespace OstranautsMP
 				{
 					net.Send("READY");
 					ItemSync.ResetKnown();
+					Apart.OnClientLoaded();
 					Plugin.Log.LogInfo("In game, sent READY");
 				}
 				_wasInGame = inGame;
@@ -229,12 +248,24 @@ namespace OstranautsMP
 						CondSync.Apply(arg);
 					}
 					return true;
+				case "PAUSE":
+					if (mode == NetSession.Mode.Host && InGame)
+					{
+						bool pause = arg == "1";
+						if (CrewSim.Paused != pause)
+						{
+							CrewSim.Paused = pause;
+							Chat.AddSystem((Chat.PeerName ?? "The other player") + (pause ? " paused the game" : " unpaused the game"));
+						}
+					}
+					return true;
 				case "READY":
 					if (mode == NetSession.Mode.Host)
 					{
 						// The client has just loaded a save; send it everyone's conditions again.
 						CondSync.ResetSnapshot();
 						SaveSync.ResetLocation();
+						Apart.OnClientReady();
 						ShipSync.OnClientReady();
 						PlayerInteractions.ResetReplies();
 						Plugin.Log.LogInfo("Client is in game");
@@ -269,7 +300,7 @@ namespace OstranautsMP
 			SeenIds.Clear();
 			foreach (Ship ship in ships)
 			{
-				if (ship == null || ship.bDestroyed)
+				if (ship == null || ship.bDestroyed || !Apart.HostSendsShip(ship.strRegID))
 				{
 					continue;
 				}

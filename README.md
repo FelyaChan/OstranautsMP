@@ -24,30 +24,43 @@ Not been tested on more recent builds.
 
 ### Playing together
 * The client picks a crew member and plays them; that character is marked as a multiplayer character in the save.
-* Pause and game speed are controlled by the host.
+* Game speed is controlled by the host; either player can pause and unpause for both (Space).
 * Synced: positions and animations of all people, needs/stats/injuries/moods, room atmosphere (gas, pressure, temperature), in-game time.
 * Client orders and radial-menu actions are carried out by the host.
 * Items, inventory, equipment and structures are synced, with automatic desync detection and repair.
 * Clicking the host's character as the client doesn't take your character away; Caps Lock crew switching is disabled for the client.
 * The client's world is a mirror of the host's: NPC AI, story events, random encounters and recurring bills run on the host only.
+* Progress bars over working people (repairs, installs, eating) are shown on the client too.
+
+### Apart mode *(experimental)*
+* When the host leaves the client behind (transit, undocking), the client's place keeps running on the client's side: its NPCs, the client's orders, dialogue and trade.
+* The host takes a copy of the client's place every few minutes (`ApartSyncMinutes` in the config, default 3), on request (`/sync` in chat), and always right before coming back, so nothing is rolled back.
+* Money the host gives (or salary paid) while apart reaches the client.
+* While apart, speeding up or skipping time needs the client's agreement, and the client can't travel.
 
 ### Ships & space
 * Docking and undocking without reloading the save (the docked ship is sent over). *(experimental)*
 * Ship flight is synced; the client can also pilot (manual helm) with immediate local response. *(experimental)*
 * Space mirrors the host: AI traffic, newly spawned and removed ships; collisions are decided by the host. *(experimental)*
-* Falls back to resending the save if a location change can't be synced.
+* Undocking with the client on the other side keeps the client's side running (apart mode).
+* Falls back to resending the save if a location change can't be synced otherwise.
 
 ### Communication
 * Chat: a window in the main menu and a **CHAT** app on the PDA (game-styled), with in-game timestamps.
 * Speech bubbles over characters, typed out typewriter-style with the speaker's name; off-screen bubbles point to the speaker.
 * Player names are coloured by how the character is doing (green → red).
-* **Ping** with the `~` key: marks a spot, or a person/item under the cursor with its name; visible to both, with an edge arrow when off-screen.
+* **Ping** with the `~` key: marks a spot or an item under the cursor with its name; on a person it rings them and follows them. Visible to both, with an edge arrow when off-screen. Each player picks their ping colour.
+* **Highlights** (optional, a checkbox in the Multiplayer window): your own locker lights up in your colour under the mouse; the other player's character has a faint aura in their colour while your character can see them (walls and closed doors block sight).
 
 ### Economy
 * **BUDGET** PDA app on the host: set the client character's daily salary (paid through the game's finance screen) and give money.
 * The client sees their own wallet (also on the bottom cash button) and ledger in their **BUDGET** app.
 * The client can buy and sell at traders with their character's own money. *(experimental)*
 * The client's character can't quit the crew.
+
+### Your character
+* **Mirror:** at any sink, **View Mirror** lets you change your own character's whole look (face, skin, body) and name. The other player sees the change. Each player can only edit their own character. Renaming keeps skills, items, salary and crew membership. *(experimental)*
+* **Lockers:** **Make it mine** on an installed container (locker, cabinet, fridge) adds your character's name to it; **Give it up** removes it. It's a label only, nobody is locked out.
 
 ### Player-to-player interactions (in the game's own dialogue menu)
 * Dialogue between players works both ways; the client's character answers by the player's choice.
@@ -85,9 +98,13 @@ If the client joins while you're already in the game, the game pauses and sends 
 * **Talk, give items, offer money, follow:** right-click the other player's character and use the dialogue / actions menu. Replies to the other player show up in the same menu.
 * **Emotes and Play dead:** right-click your own character (the **Emote** group); **Get up** to stop playing dead.
 * **Ping:** press `~` (the key left of `1`) — on a spot, a person or an item.
+* **Pause:** Space pauses or unpauses the game for both players.
+* **Change your looks and name:** use **View Mirror** on a sink. The new name is applied when you close the window.
+* **Lockers:** right-click an installed container → **Make it mine** / **Give it up**.
+* **Apart:** if the host leaves your place, it keeps running for you, and the host gets it back as you left it. The host can take it right away with `/sync` in chat.
 * **Chat:** the **CHAT** app on the PDA (in the main menu: the **Chat** button in the Multiplayer window).
 * **Money:** the **BUDGET** app on the PDA — the host sets salary and gives money; the client sees their wallet and ledger. Salary is paid by the host in the game's finance screen (the cash button at the bottom).
-* **Piloting:** only the host's time controls work (pause, speed). Either player can fly from the nav station; if both steer, the host's input wins.
+* **Piloting:** game speed is the host's. Either player can fly from the nav station; if both steer, the host's input wins.
 
 ---
 

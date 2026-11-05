@@ -210,6 +210,38 @@ namespace OstranautsMP
 			}
 		}
 
+		// Main thread. Blocks until a binary message <cmd> of this session arrives (taking it out of the queue, the rest
+		// stays in order) or the time runs out; null then. Messages already taken by a running Poll aren't seen.
+		public byte[] WaitBinary(string cmd, int timeoutMs)
+		{
+			int gen = _generation;
+			Stopwatch sw = Stopwatch.StartNew();
+			while (sw.ElapsedMilliseconds < timeoutMs && Connected && gen == _generation)
+			{
+				lock (_lock)
+				{
+					int n = _inbox.Count;
+					byte[] found = null;
+					for (int i = 0; i < n; i++)
+					{
+						Msg m = _inbox.Dequeue();
+						if (found == null && m.Gen == gen && m.Data != null && m.Line == cmd)
+						{
+							found = m.Data;
+							continue;
+						}
+						_inbox.Enqueue(m);
+					}
+					if (found != null)
+					{
+						return found;
+					}
+				}
+				Thread.Sleep(5);
+			}
+			return null;
+		}
+
 		public void Poll(float now)
 		{
 			lock (_lock)

@@ -19,7 +19,7 @@ namespace OstranautsMP
 
 		public const string PluginName = "Ostranauts Multiplayer";
 
-		public const string Version = "0.20.1";
+		public const string Version = "0.24.3";
 
 		internal static ManualLogSource Log;
 
@@ -34,6 +34,39 @@ namespace OstranautsMP
 		private static ConfigEntry<string> _lastAddress;
 
 		private static ConfigEntry<string> _lastPort;
+
+		private static ConfigEntry<string> _markColor;
+
+		private static ConfigEntry<bool> _highlights;
+
+		internal static bool HighlightsOn => _highlights == null || _highlights.Value;
+
+		// Ping colours offered in the Multiplayer window.
+		private static readonly string[] MarkPalette = { "FFD933", "FF8A1F", "FF4D4D", "FF5FD2", "B06CFF", "4DA6FF", "2BD9C8", "6BFF6B", "F2F2F2" };
+
+		private static Texture2D[] _swatches;
+
+		private static Texture2D _swatchEdge;
+
+		// This player's ping colour (hex, no '#').
+		internal static string MarkColorHex
+		{
+			get
+			{
+				string v = (_markColor != null) ? _markColor.Value : null;
+				Color c;
+				return (v != null && ColorUtility.TryParseHtmlString("#" + v, out c)) ? v : MarkPalette[0];
+			}
+		}
+
+		internal static Color MarkColor
+		{
+			get
+			{
+				Color c;
+				return ColorUtility.TryParseHtmlString("#" + MarkColorHex, out c) ? c : new Color(1f, 0.85f, 0.2f);
+			}
+		}
 
 		internal static string PlayerName
 		{
@@ -68,6 +101,9 @@ namespace OstranautsMP
 			_playerName = Config.Bind("General", "PlayerName", "Player", "Your name in multiplayer chat.");
 			_lastAddress = Config.Bind("General", "LastAddress", "127.0.0.1", "Host address used for the last Join.");
 			_lastPort = Config.Bind("General", "LastPort", "7777", "Port used for the last Host or Join.");
+			_markColor = Config.Bind("General", "MarkColor", MarkPalette[0], "Colour of your pings (~ key), hex RRGGBB.");
+			_highlights = Config.Bind("General", "Highlights", true, "Your lockers light up in your colour under the mouse; the other player's character has a faint aura in their colour while yours can see them.");
+			Apart.Init(Config);
 			_address = _lastAddress.Value;
 			_port = _lastPort.Value;
 			Net.OnMessage = RouteMessage;
@@ -89,6 +125,10 @@ namespace OstranautsMP
 			ClientQuiet.Patch(harmony);
 			Budget.Patch(harmony);
 			PlayerInteractions.Patch(harmony);
+			Apart.Patch(harmony);
+			WorkProgress.Patch(harmony);
+			Ownership.Patch(harmony);
+			Mirror.Patch(harmony);
 			RemoveUnitySingleInstance();
 			Log.LogInfo(PluginName + " " + Version + " loaded" + ((InstanceLog.Instance != null) ? (", instance log: " + InstanceLog.Instance.FilePath) : ", instance log unavailable"));
 		}
@@ -163,6 +203,10 @@ namespace OstranautsMP
 			{
 				DockSync.OnBinary(data);
 			}
+			else if (cmd == "SNAP")
+			{
+				Apart.OnBinary(data);
+			}
 			else if (cmd == "SHIPNEW")
 			{
 				ShipSync.OnBinary(data);
@@ -175,7 +219,7 @@ namespace OstranautsMP
 
 		private static void RouteMessage(string cmd, string arg)
 		{
-			if (!WorldSync.OnMessage(cmd, arg, Time.unscaledTime) && !OrderSync.OnMessage(cmd, arg) && !ItemSync.OnMessage(cmd, arg, Time.unscaledTime) && !CrewClaim.OnMessage(cmd, arg) && !Chat.OnMessage(cmd, arg) && !DockSync.OnMessage(cmd, arg) && !ShipSync.OnMessage(cmd, arg, Time.unscaledTime) && !Budget.OnMessage(cmd, arg) && !PlayerInteractions.OnMessage(cmd, arg))
+			if (!WorldSync.OnMessage(cmd, arg, Time.unscaledTime) && !OrderSync.OnMessage(cmd, arg) && !ItemSync.OnMessage(cmd, arg, Time.unscaledTime) && !CrewClaim.OnMessage(cmd, arg) && !Chat.OnMessage(cmd, arg) && !DockSync.OnMessage(cmd, arg) && !ShipSync.OnMessage(cmd, arg, Time.unscaledTime) && !Budget.OnMessage(cmd, arg) && !PlayerInteractions.OnMessage(cmd, arg) && !Apart.OnMessage(cmd, arg) && !WorkProgress.OnMessage(cmd, arg) && !Ownership.OnMessage(cmd, arg) && !Mirror.OnMessage(cmd, arg) && !Highlights.OnMessage(cmd, arg))
 			{
 				SaveSync.OnMessage(cmd, arg);
 			}
@@ -184,6 +228,8 @@ namespace OstranautsMP
 		private void Update()
 		{
 			Net.Poll(Time.unscaledTime);
+			// First, so everything sent this frame already knows whether the players are apart.
+			Apart.Update(Time.unscaledTime);
 			if (InstanceLog.Instance != null && Time.unscaledTime >= _nextMemoryLog)
 			{
 				_nextMemoryLog = Time.unscaledTime + 10f;
@@ -208,6 +254,7 @@ namespace OstranautsMP
 			ShipSync.Update(Time.unscaledTime);
 			Budget.Update(Time.unscaledTime);
 			PlayerInteractions.Update(Time.unscaledTime);
+			Highlights.Update(Time.unscaledTime);
 			if (Menu == null)
 			{
 				_windowOpen = false;
@@ -269,7 +316,9 @@ namespace OstranautsMP
 			{
 				GUI.Label(new Rect(10f, 10f, 600f, 24f), StatusLine());
 			}
+			Highlights.OnGUI();
 			CrewClaim.OnGUI();
+			Apart.OnGUI();
 			Chat.OnGUI();
 		}
 
@@ -364,6 +413,15 @@ namespace OstranautsMP
 				}
 			}
 			GUILayout.Space(8f);
+			GUILayout.Space(8f);
+			GUILayout.Label("Ping colour (~)");
+			DrawSwatches();
+			bool hl = GUILayout.Toggle(_highlights.Value, " Highlights: your lockers, the other player's aura");
+			if (hl != _highlights.Value)
+			{
+				_highlights.Value = hl;
+			}
+			GUILayout.Space(8f);
 			if (GUILayout.Button(Chat.MenuWindowOpen ? "Hide chat" : "Chat"))
 			{
 				Chat.MenuWindowOpen = !Chat.MenuWindowOpen;
@@ -376,6 +434,45 @@ namespace OstranautsMP
 				}
 			}
 			GUI.DragWindow();
+		}
+
+		private static void DrawSwatches()
+		{
+			if (_swatches == null)
+			{
+				_swatches = new Texture2D[MarkPalette.Length];
+				for (int i = 0; i < MarkPalette.Length; i++)
+				{
+					Color c;
+					ColorUtility.TryParseHtmlString("#" + MarkPalette[i], out c);
+					Texture2D t = new Texture2D(1, 1);
+					t.SetPixel(0, 0, c);
+					t.Apply();
+					t.hideFlags = HideFlags.HideAndDontSave;
+					_swatches[i] = t;
+				}
+				_swatchEdge = new Texture2D(1, 1);
+				_swatchEdge.SetPixel(0, 0, Color.white);
+				_swatchEdge.Apply();
+				_swatchEdge.hideFlags = HideFlags.HideAndDontSave;
+			}
+			string current = MarkColorHex;
+			GUILayout.BeginHorizontal();
+			for (int i = 0; i < MarkPalette.Length; i++)
+			{
+				Rect r = GUILayoutUtility.GetRect(30f, 30f, GUILayout.Width(30f), GUILayout.Height(30f));
+				bool selected = string.Equals(current, MarkPalette[i], StringComparison.OrdinalIgnoreCase);
+				if (selected)
+				{
+					GUI.DrawTexture(r, _swatchEdge);
+				}
+				GUI.DrawTexture(selected ? new Rect(r.x + 3f, r.y + 3f, r.width - 6f, r.height - 6f) : new Rect(r.x + 2f, r.y + 2f, r.width - 4f, r.height - 4f), _swatches[i]);
+				if (GUI.Button(r, GUIContent.none, GUIStyle.none))
+				{
+					_markColor.Value = MarkPalette[i];
+				}
+			}
+			GUILayout.EndHorizontal();
 		}
 
 		private bool TryParsePort(out int port)
@@ -404,6 +501,15 @@ namespace OstranautsMP
 			if (notice != null)
 			{
 				s += " | " + notice;
+			}
+			string apart = Apart.HostNotice;
+			if (apart != null)
+			{
+				s += " | " + apart;
+			}
+			else if (Apart.ClientActive)
+			{
+				s += " | apart";
 			}
 			string mine = CrewClaim.MineName;
 			if (mine != null)

@@ -8,7 +8,8 @@ namespace OstranautsMP
 	// People's AI: every person (and robot) decides what to do next in CondOwner.EndTurnSteps (timed conditions,
 	// pledges, needs, the action queue). On the client that doesn't run for anyone but the client's own character:
 	// positions and animations come from WorldSync, conditions from CondSync, item changes from ItemSync. The client's
-	// own character keeps it, since the client's orders are also carried out locally.
+	// own character keeps it, since the client's orders are also carried out locally. While apart from the host, the
+	// people of the client's place run here too (Apart).
 	//
 	// Story and random events: BeatManager.Update (tension/release events, autosave timer), BeatManager.RunEncounter
 	// (both overloads) and PlotManager.CheckPlots don't run on the client.
@@ -52,7 +53,7 @@ namespace OstranautsMP
 
 		private static bool EndTurnStepsPrefix(CondOwner __instance, ref IEnumerator __result)
 		{
-			if (!Quiet || __instance == null || !__instance.IsHumanOrRobot || __instance == CrewClaim.ClientMine)
+			if (!Quiet || __instance == null || !__instance.IsHumanOrRobot || __instance == CrewClaim.ClientMine || Apart.ClientSimulates(__instance))
 			{
 				return true;
 			}

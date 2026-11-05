@@ -45,6 +45,9 @@ namespace OstranautsMP
 			public List<JsonCondOwnerSave> COs;
 
 			public JsonAIShipSave AI;
+
+			// The host's own ship, when the client doesn't have it loaded (coming back after being apart).
+			public DockPayload UsCopy;
 		}
 
 		// Client: inside a relayed call; the game's own dock/undock calls are blocked otherwise.
@@ -115,6 +118,12 @@ namespace OstranautsMP
 			{
 				return;
 			}
+			// Apart: docking somewhere else stays here; docking to the client's place brings the host back.
+			if (!Apart.RelayDock(__result.strRegID))
+			{
+				Plugin.Log.LogInfo("Docked " + shipUs.strRegID + " to " + __result.strRegID + ", not relayed (apart)");
+				return;
+			}
 			try
 			{
 				DockPayload p = new DockPayload();
@@ -123,16 +132,27 @@ namespace OstranautsMP
 				p.PortUs = shipUs.GetPortIdForDockedShip(__result.strRegID);
 				p.PortThem = __result.GetPortIdForDockedShip(shipUs.strRegID);
 				Ship newcomer = (!usIn) ? shipUs : ((!themIn) ? __result : null);
+				// The client runs that one itself (we're back at its place): it keeps its own copy.
+				if (newcomer != null && Apart.ClientHasLoaded(newcomer.strRegID) && newcomer != shipUs)
+				{
+					newcomer = null;
+				}
 				if (newcomer != null)
 				{
 					p.Newcomer = newcomer.strRegID;
 					Snapshot(newcomer, p);
 				}
+				if (newcomer != shipUs && !Apart.ClientHasLoaded(shipUs.strRegID) && Apart.HostActive)
+				{
+					p.UsCopy = new DockPayload();
+					p.UsCopy.Newcomer = shipUs.strRegID;
+					Snapshot(shipUs, p.UsCopy);
+				}
 				byte[] data = Gzip(Encoding.UTF8.GetBytes(JsonMapper.ToJson(p)));
 				// Sent here on the main thread, so it reaches the client before any later item change on that ship.
 				Plugin.Net.SendBinary("DOCK", data, 0, data.Length);
 				SaveSync.SuspendLocation();
-				Plugin.Log.LogInfo("Docked " + p.Us + " (" + p.PortUs + ") to " + p.Them + " (" + p.PortThem + "), sent " + ((newcomer != null) ? (newcomer.strRegID + ", " + p.COs.Count + " items, ") : "") + data.Length + " bytes");
+				Plugin.Log.LogInfo("Docked " + p.Us + " (" + p.PortUs + ") to " + p.Them + " (" + p.PortThem + "), sent " + ((newcomer != null) ? (newcomer.strRegID + ", " + p.COs.Count + " items, ") : "") + ((p.UsCopy != null) ? ("our ship, " + p.UsCopy.COs.Count + " items, ") : "") + data.Length + " bytes");
 			}
 			catch (Exception e)
 			{
@@ -249,6 +269,12 @@ namespace OstranautsMP
 			{
 				return;
 			}
+			// Apart: the client doesn't have this pair docked as we do; nothing to undo there.
+			if (Apart.HostActive && !(Apart.ClientHasLoaded(shipUs.strRegID) && Apart.ClientHasLoaded(objShipThem.strRegID)))
+			{
+				Plugin.Log.LogInfo("Undocked " + shipUs.strRegID + " from " + objShipThem.strRegID + ", not relayed (apart)");
+				return;
+			}
 			string situ = (shipUs.objSS != null) ? Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonMapper.ToJson(shipUs.objSS.GetJSON()))) : "";
 			Plugin.Net.Send("UNDOCK " + shipUs.strRegID + "|" + objShipThem.strRegID + "|" + (bPushback ? "1" : "0") + "|" + (keepClearance ? "1" : "0") + "|" + situ + "|" + StarSystem.fEpoch.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
 			SaveSync.SuspendLocation();
@@ -338,6 +364,35 @@ namespace OstranautsMP
 					return error;
 				}
 			}
+			// Coming back after being apart: the host's ship as it is now, without the people we still have here (the
+			// host's character waited in our place); they move aboard after docking.
+			List<CondOwner> waiting = new List<CondOwner>();
+			if (p.UsCopy != null && p.UsCopy.Ship != null)
+			{
+				if (p.UsCopy.Ship.aCrew != null)
+				{
+					foreach (JsonItem crew in p.UsCopy.Ship.aCrew)
+					{
+						CondOwner co;
+						if (crew != null && crew.strID != null && DataHandler.mapCOs.TryGetValue(crew.strID, out co) && co != null && !co.bDestroyed)
+						{
+							waiting.Add(co);
+						}
+					}
+				}
+				Apart.FilterLive(p.UsCopy);
+				string error = ReplaceShip(p.UsCopy);
+				if (error != null)
+				{
+					return error;
+				}
+				Ship loaded = CrewSim.system.SpawnShip(p.UsCopy.Newcomer, Ship.Loaded.Full);
+				if (loaded == null)
+				{
+					return "could not load " + p.UsCopy.Newcomer;
+				}
+				loaded.ToggleVis(bShow: true);
+			}
 			Ship us = CrewSim.system.GetShipByRegID(p.Us);
 			if (us == null)
 			{
@@ -357,7 +412,14 @@ namespace OstranautsMP
 			{
 				return "DockShip returned null";
 			}
-			Plugin.Log.LogInfo("Docked " + p.Us + " to " + p.Them);
+			foreach (CondOwner co in waiting)
+			{
+				if (co.ship != us)
+				{
+					CrewSim.MoveCO(co, us, bPlayerShip: false);
+				}
+			}
+			Plugin.Log.LogInfo("Docked " + p.Us + " to " + p.Them + ((waiting.Count > 0) ? (", " + waiting.Count + " aboard again") : ""));
 			return null;
 		}
 
@@ -431,14 +493,33 @@ namespace OstranautsMP
 			{
 				return "no ship " + ((us == null) ? f[0] : f[1]);
 			}
-			_applying = true;
-			try
+			// Our character stays on the other side: unloading that (the game's undock) would unload us. Only unlink the
+			// two; the host's ship flies off loaded, and our place keeps running here (Apart).
+			CondOwner mine = CrewClaim.ClientMine;
+			Ship mineShip = (mine != null) ? mine.ship : null;
+			bool stay = mineShip != null && mineShip != us && (mineShip == them || System.Linq.Enumerable.Contains(them.GetAllDockedShips(), mineShip)) && !OnUsSide(us, them, mineShip);
+			if (stay)
 			{
-				CrewSim.UndockShip(us, them, f[2] == "1", f[3] == "1");
+				us.ResetDockedCache();
+				us.Undock(them);
+				if (f[3] != "1")
+				{
+					us.Comms.Clearance = null;
+					them.Comms.Clearance = null;
+				}
+				them.ResetDockedCache();
 			}
-			finally
+			else
 			{
-				_applying = false;
+				_applying = true;
+				try
+				{
+					CrewSim.UndockShip(us, them, f[2] == "1", f[3] == "1");
+				}
+				finally
+				{
+					_applying = false;
+				}
 			}
 			// Where the host's ship ended up after the pushback.
 			if (f[4].Length > 0 && us.objSS != null)
@@ -457,8 +538,21 @@ namespace OstranautsMP
 				}
 				us.UpdateDockedShips(us.objSS);
 			}
-			Plugin.Log.LogInfo("Undocked " + f[0] + " from " + f[1]);
+			Plugin.Log.LogInfo("Undocked " + f[0] + " from " + f[1] + (stay ? " (we stay)" : ""));
 			return null;
+		}
+
+		// Whether this ship stays docked to us (not through them) once they're undocked.
+		private static bool OnUsSide(Ship us, Ship them, Ship ship)
+		{
+			foreach (KeyValuePair<string, Ship> kv in us.GetDockedShipsAndPortIDs())
+			{
+				if (kv.Value == ship && kv.Value != them)
+				{
+					return true;
+				}
+			}
+			return false;
 		}
 
 		// ---- Helpers -------------------------------------------------------------------------------------------

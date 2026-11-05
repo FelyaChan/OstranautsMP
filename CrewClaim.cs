@@ -39,6 +39,34 @@ namespace OstranautsMP
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "MouseHandler"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(MouseHandlerPrefix)), finalizer: new HarmonyMethod(typeof(CrewClaim), nameof(MouseHandlerFinalizer)));
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "Walk"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(WalkPrefix)));
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "CycleCrew"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(CycleCrewPrefix)));
+			harmony.Patch(AccessTools.Method(typeof(CondOwner), "QueueInteraction"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(NoClientUIOnHost)));
+			harmony.Patch(AccessTools.Method(typeof(CrewSim), "RaiseUI"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(NotWhileRelaying)));
+			harmony.Patch(AccessTools.Method(typeof(Ostranauts.InputControl.CommandInventory), "ToggleInventory"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(NotWhileRelaying)));
+		}
+
+		// Host: the client's character's actions don't open windows here (they open on the client, who does them too).
+		// The game raises an action's window for whoever does it, and for a crew member who isn't selected it first
+		// switches the host to them (CrewSim.RaiseUI -> CycleCrew); when the action ends it closes the host's window.
+		// Unless the host has selected that character themselves.
+		private static void NoClientUIOnHost(CondOwner __instance, Interaction objInteraction)
+		{
+			if (objInteraction == null || Plugin.Net.CurrentMode != NetSession.Mode.Host || !Plugin.Net.Connected)
+			{
+				return;
+			}
+			CondOwner client = HostClaimed;
+			if (client == null || __instance != client || (!OrderSync.HostRelaying && CrewSim.GetSelectedCrew() == client))
+			{
+				return;
+			}
+			objInteraction.strRaiseUI = null;
+			objInteraction.strRaiseUIThem = null;
+		}
+
+		// Host: nothing opens while a client order is being carried out (the client's character is selected then).
+		private static bool NotWhileRelaying()
+		{
+			return !OrderSync.HostRelaying;
 		}
 
 		// No switching crew on the client (Caps Lock, the crew bar cards, the game's own calls): switching takes over
@@ -126,6 +154,19 @@ namespace OstranautsMP
 		}
 
 		private static bool Locked => _confirmed && Plugin.Net.CurrentMode == NetSession.Mode.Client && Plugin.Net.Connected && WorldSync.InGame && Mine != null;
+
+		// A character was renamed (its ID is its name): keep pointing at it.
+		internal static void Renamed(string oldId, string newId)
+		{
+			if (_claimed == oldId)
+			{
+				_claimed = newId;
+			}
+			if (_mine == oldId)
+			{
+				_mine = newId;
+			}
+		}
 
 		internal static string MineName
 		{

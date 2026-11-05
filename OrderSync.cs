@@ -42,6 +42,9 @@ namespace OstranautsMP
 
 		internal static bool InUserInput => _userInput > 0;
 
+		// Host: inside a relayed client order or menu action (the client's character is selected for the call).
+		internal static bool HostRelaying;
+
 		public static void Patch(Harmony harmony)
 		{
 			HarmonyMethod enter = new HarmonyMethod(typeof(OrderSync), nameof(EnterInput));
@@ -78,7 +81,8 @@ namespace OstranautsMP
 			Plugin.Log.LogInfo("Inventory input scope: " + patched + " methods");
 		}
 
-		private static bool ClientActive => WorldSync.ClientFollowsHost && WorldSync.InGame;
+		// Apart from the host, our orders are only carried out here.
+		private static bool ClientActive => WorldSync.ClientFollowsHost && WorldSync.InGame && !Apart.ClientActive;
 
 		internal static void EnterInput()
 		{
@@ -251,12 +255,14 @@ namespace OstranautsMP
 			List<CondOwner> selection = new List<CondOwner>(CrewSim.aSelected);
 			CrewSim.aSelected.Clear();
 			CrewSim.aSelected.Add(us);
+			HostRelaying = true;
 			try
 			{
 				RadialContextMenuObject.ProcessInteraction(ia);
 			}
 			finally
 			{
+				HostRelaying = false;
 				CrewSim.aSelected.Clear();
 				CrewSim.aSelected.AddRange(selection);
 			}
@@ -306,7 +312,16 @@ namespace OstranautsMP
 					return;
 				}
 			}
-			bool issued = us.AIIssueOrder(them, ia, playerOrdered, til, posX, posY);
+			bool issued;
+			HostRelaying = true;
+			try
+			{
+				issued = us.AIIssueOrder(them, ia, playerOrdered, til, posX, posY);
+			}
+			finally
+			{
+				HostRelaying = false;
+			}
 			if (issued && playerOrdered)
 			{
 				// What CrewSim.AIManual(true) does for the selected crew, so the host's AI doesn't take the character back.

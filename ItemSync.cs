@@ -95,6 +95,7 @@ namespace OstranautsMP
 			harmony.Patch(AccessTools.Method(typeof(Ship), "AddCO", new Type[] { typeof(CondOwner), typeof(bool), typeof(bool) }), postfix: new HarmonyMethod(typeof(ItemSync), nameof(MarkObjICO)));
 			harmony.Patch(AccessTools.Method(typeof(Ship), "RemoveCO"), postfix: new HarmonyMethod(typeof(ItemSync), nameof(MarkObjCO)));
 			harmony.Patch(AccessTools.Method(typeof(CondOwner), "Destroy"), prefix: new HarmonyMethod(typeof(ItemSync), nameof(DestroyPrefix)));
+			harmony.Patch(AccessTools.Method(typeof(CondOwner), "ModeSwitch"), postfix: new HarmonyMethod(typeof(ItemSync), nameof(ModeSwitchPostfix)));
 			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyEffects"), postfix: new HarmonyMethod(typeof(ItemSync), nameof(ApplyEffectsPostfix)));
 			harmony.Patch(AccessTools.Method(typeof(DataHandler), "GetCondOwner", new Type[] { typeof(string), typeof(string), typeof(string), typeof(bool), typeof(string), typeof(JsonCondOwnerSave), typeof(string), typeof(Transform) }), prefix: new HarmonyMethod(typeof(ItemSync), nameof(GetCondOwnerPrefix)), postfix: new HarmonyMethod(typeof(ItemSync), nameof(GetCondOwnerPostfix)));
 		}
@@ -111,7 +112,8 @@ namespace OstranautsMP
 		}
 
 		// Host: every change. Client: only changes made directly by the player.
-		private static bool Tracking => _suppressDepth <= 0 && _applyingDepth <= 0 && Plugin.Net.Connected && WorldSync.InGame && (Plugin.Net.CurrentMode == NetSession.Mode.Host || (WorldSync.ClientFollowsHost && OrderSync.InUserInput));
+		// Client apart from the host: our place is ours alone, nothing about it goes to the host.
+		private static bool Tracking => _suppressDepth <= 0 && _applyingDepth <= 0 && Plugin.Net.Connected && WorldSync.InGame && (Plugin.Net.CurrentMode == NetSession.Mode.Host || (WorldSync.ClientFollowsHost && OrderSync.InUserInput && !Apart.ClientActive));
 
 		private static bool FlushAllowed => _suppressDepth <= 0 && Plugin.Net.Connected && WorldSync.InGame && (Plugin.Net.CurrentMode == NetSession.Mode.Host || WorldSync.ClientFollowsHost);
 
@@ -199,9 +201,26 @@ namespace OstranautsMP
 			}
 		}
 
+		// An item turned into another kind (repaired, broken, switched on or off) keeps its ID but is a new object of
+		// another type: the other side needs it in full, not just its place.
+		private static void ModeSwitchPostfix(CondOwner coNew)
+		{
+			if (coNew != null && coNew.strID != null && Tracking && IsItem(coNew))
+			{
+				Fresh.Add(coNew.strID);
+				Dirty[coNew.strID] = coNew;
+			}
+		}
+
 		private static void DestroyPrefix(CondOwner __instance)
 		{
 			if (!Tracking || !IsItem(__instance))
+			{
+				return;
+			}
+			// The old object of a mode switch: its ID lives on in the new one, which is sent in full.
+			CondOwner current;
+			if (__instance.strID != null && DataHandler.mapCOs.TryGetValue(__instance.strID, out current) && current != null && current != __instance && !current.bDestroyed)
 			{
 				return;
 			}
@@ -217,7 +236,10 @@ namespace OstranautsMP
 				Dirty.Remove(__instance.strID);
 			}
 			Fresh.Remove(__instance.strID);
-			Plugin.Net.Send("GONE " + __instance.strID);
+			if (Apart.HostSends(__instance))
+			{
+				Plugin.Net.Send("GONE " + __instance.strID);
+			}
 		}
 
 		// Main thread, every frame: send what was marked this frame.
@@ -241,7 +263,7 @@ namespace OstranautsMP
 					continue;
 				}
 				CondOwner head = (co.coStackHead != null) ? co.coStackHead : co;
-				if (IsItem(head))
+				if (IsItem(head) && Apart.HostSends(head))
 				{
 					Units[head.strID] = head;
 				}
@@ -531,6 +553,12 @@ namespace OstranautsMP
 				}
 				string key = entry.Substring(0, eq);
 				string hostHash = entry.Substring(eq + 1, colon - eq - 1);
+				if (!HaveGroup(key))
+				{
+					// A ship or person that isn't loaded here: nothing to compare.
+					Mismatches.Remove(key);
+					continue;
+				}
 				List<CondOwner> mine;
 				if (!local.TryGetValue(key, out mine))
 				{
@@ -568,6 +596,18 @@ namespace OstranautsMP
 				_notice = "DESYNC: resyncing " + requested + " group(s)";
 				_noticeUntil = now + 10f;
 			}
+		}
+
+		private static bool HaveGroup(string key)
+		{
+			string id = key.Substring(2);
+			if (key.StartsWith("S~"))
+			{
+				Ship ship = (CrewSim.system != null) ? CrewSim.system.GetShipByRegID(id) : null;
+				return ship != null && ship.LoadState == Ship.Loaded.Full;
+			}
+			CondOwner co;
+			return DataHandler.mapCOs.TryGetValue(id, out co) && co != null && !co.bDestroyed;
 		}
 
 		private static void HostResync(string arg)
@@ -648,7 +688,7 @@ namespace OstranautsMP
 			HashSet<string> seen = new HashSet<string>();
 			foreach (Ship ship in ships)
 			{
-				if (ship == null || ship.bDestroyed || ship.LoadState != Ship.Loaded.Full || ship.strRegID == null)
+				if (ship == null || ship.bDestroyed || ship.LoadState != Ship.Loaded.Full || ship.strRegID == null || (Plugin.Net.CurrentMode == NetSession.Mode.Host && !Apart.HostSendsShip(ship.strRegID)))
 				{
 					continue;
 				}
@@ -952,8 +992,17 @@ namespace OstranautsMP
 			CondOwner co;
 			if (DataHandler.mapCOs.TryGetValue(save.strID, out co) && co != null && !co.bDestroyed)
 			{
-				ApplyConds(co, save);
-				return co;
+				if (save.strCODef == null || co.strCODef == save.strCODef)
+				{
+					ApplyConds(co, save);
+					return co;
+				}
+				// Turned into another kind on the other side (CondOwner.ModeSwitch): ours is the old kind, with the old
+				// kind's actions. Rebuild it from the save.
+				Plugin.Log.LogInfo("Item " + save.strID + " changed from " + co.strCODef + " to " + save.strCODef);
+				Unstack(co);
+				co.RemoveFromCurrentHome(bForce: true);
+				co.Destroy();
 			}
 			if (save.strCODef == null)
 			{

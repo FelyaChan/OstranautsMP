@@ -24,6 +24,10 @@ namespace OstranautsMP
 
 		private const double Epsilon = 1E-06;
 
+		private const float FullInterval = 3f;
+
+		private static float _nextFull;
+
 		private const string RoomPrefix = "R#";
 
 		private const string MolPrefix = "StatGasMol";
@@ -65,11 +69,22 @@ namespace OstranautsMP
 			{
 				return;
 			}
+			// The client's character also runs its actions locally (prediction); what that changed there and not
+			// here would never be corrected by changes alone, so its conditions are sent in full every few seconds.
+			if (now >= _nextFull)
+			{
+				_nextFull = now + FullInterval;
+				CondOwner cc = CrewClaim.HostClaimed;
+				if (cc != null && cc.strID != null)
+				{
+					Sent.Remove(cc.strID);
+				}
+			}
 			Sb.Length = 0;
 			Seen.Clear();
 			foreach (Ship ship in ships)
 			{
-				if (ship == null || ship.bDestroyed)
+				if (ship == null || ship.bDestroyed || !Apart.HostSendsShip(ship.strRegID))
 				{
 					continue;
 				}
