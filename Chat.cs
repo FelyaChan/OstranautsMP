@@ -10,16 +10,22 @@ namespace OstranautsMP
 {
 	// Chat between the two players, "joined / left / timed out" notices, speech bubbles and map pings.
 	//
-	// Main menu: a chat window opened from the Multiplayer window.
-	// In game: a "CHAT" app on the PDA (PdaChat, built from the game's own UI). The app is an entry added to the PDA's
-	// app list (DataHandler.dictPDAAppIcons) that GUIPDA.OpenApp is patched to handle. Lines carry the in-game time.
-	// A message is typed out, like a typewriter, as "Name: text" in a bubble over the sender's character, then stays
-	// for a few seconds; if the character is off screen, the bubble sits at the screen edge with a tail pointing at them.
+	// Two kinds of messages:
+	// - Speech: Enter in the game opens a one-line field (quick chat). What's typed is said by your character: a bubble,
+	//   typed out like a typewriter as "Name: text" over them, then gone after a few seconds (if the character is off
+	//   screen, the bubble sits at the screen edge with a tail pointing at them). It isn't kept anywhere.
+	// - PDA messages: "/pda text" in the quick chat (or PDA mode: "/pda" alone switches the quick chat to it and back),
+	//   and everything typed in the main menu chat window. These are records in the "CHAT" app on the PDA (PdaChat):
+	//   the sender's avatar and colour, the in-game time, the text; each can be deleted, or the whole chat. They are kept
+	//   with the player's profile on this computer, across games and sessions (PdaLog). Notices (joined, left, the
+	//   mod's own) are records too, for this session only. The app is an entry added to the PDA's app list (DataHandler.dictPDAAppIcons)
+	//   that GUIPDA.OpenApp is patched to handle.
 	// The ~ key (Ё on a Russian layout, same physical key) drops a ping where the mouse points; both players see it.
 	// Names in bubbles and pings are coloured by how the speaker's character is doing: green (fine) to red (bad),
 	// from the worst condition they show (the game's own Good / Badish / Bad / BadVery colour classes).
 	//
-	// Protocol: NAME <name>; CHAT <characterID>|<epoch>|<text> (characterID and epoch empty when not in game);
+	// Protocol: NAME <name>; SAY <characterID>|<epoch>|<text> (speech); CHAT <message ID>|<profile ID>|<epoch>|<colour
+	// hex>|<name>|<text> (a PDA message; epoch empty when not in game);
 	// MARK <x>|<y>|<characterID>|<base64 label>|<colour hex>|<target person ID>. The ping sits where the mouse was; if
 	// that was over an item, it names it. Over a person, it names them and rings them, following them while it lasts. Each player picks their ping colour in the Multiplayer window.
 	// "/me text" in chat is a role-play action: shown as "* <character name> text", in the bubble in italics.
@@ -42,6 +48,9 @@ namespace OstranautsMP
 		{
 			public double Epoch;
 
+			// Real time (UTC), to sort with the saved messages.
+			public long Ticks;
+
 			public string Clock;
 
 			public string Name;
@@ -52,6 +61,12 @@ namespace OstranautsMP
 
 			// "/me": Name is the character's name, Text the action.
 			public bool Action;
+
+			// The sender's colour (system lines: grey).
+			public Color Color;
+
+			// For deleting one line.
+			public int Id;
 		}
 
 		private struct Bubble
@@ -92,6 +107,8 @@ namespace OstranautsMP
 
 		private static readonly List<Line> Lines = new List<Line>();
 
+		private static int _nextLineId;
+
 		private static readonly List<Bubble> Bubbles = new List<Bubble>();
 
 		private static readonly List<Mark> Marks = new List<Mark>();
@@ -128,6 +145,18 @@ namespace OstranautsMP
 
 		private static bool _weSetTyping;
 
+		// Quick chat: Enter in the game opens a one-line field; Enter says it (bubble), Esc closes it.
+		private const string QuickControl = "MPQuickChat";
+
+		private static bool _quickOpen;
+
+		private static string _quickText = "";
+
+		private static int _quickOpenedFrame;
+
+		// Quick chat sends to the PDA instead of speaking ("/pda" alone switches).
+		private static bool _pdaMode;
+
 		private static Texture2D _white;
 
 		private static GUIStyle _bubbleStyle;
@@ -149,6 +178,7 @@ namespace OstranautsMP
 			_peerAnnounced = false;
 			PeerName = null;
 			Plugin.Net.Send("NAME " + Plugin.PlayerName);
+			PdaLog.SendAvatar();
 		}
 
 		public static void OnPeerLost(string reason)
@@ -178,19 +208,33 @@ namespace OstranautsMP
 					PeerName = name;
 					return true;
 				}
-				case "CHAT":
+				case "SAY":
 				{
 					string[] f = arg.Split(new char[] { '|' }, 3);
-					if (f.Length != 3)
+					if (f.Length == 3)
+					{
+						AddSpeech(f[0], (PeerName != null) ? PeerName : "Player", f[2]);
+					}
+					return true;
+				}
+				case "CHAT":
+				{
+					string[] f = arg.Split(new char[] { '|' }, 6);
+					if (f.Length != 6)
 					{
 						return true;
 					}
 					double epoch;
-					if (!double.TryParse(f[1], NumberStyles.Float, Inv, out epoch))
+					if (!double.TryParse(f[2], NumberStyles.Float, Inv, out epoch))
 					{
 						epoch = double.NaN;
 					}
-					AddChat(f[0], (PeerName != null) ? PeerName : "Player", f[2], epoch);
+					string name = (f[4].Length > 0) ? f[4] : ((PeerName != null) ? PeerName : "Player");
+					AddRecord(f[0], f[1], name, f[5], epoch, f[3]);
+					string rest;
+					bool action = IsAction(f[5], out rest);
+					Color color;
+					PdaNotify.Show(f[1], name, action ? rest : f[5], ColorUtility.TryParseHtmlString("#" + f[3], out color) ? color : Color.white, action);
 					return true;
 				}
 				case "MARK":
@@ -226,7 +270,13 @@ namespace OstranautsMP
 			}
 		}
 
+		// Main menu chat window: always a PDA message. Quick chat: speech, unless "/pda ..." or PDA mode.
 		internal static void SendText(string raw)
+		{
+			Send(raw, WorldSync.InGame ? _pdaMode : true);
+		}
+
+		private static void Send(string raw, bool toPda)
 		{
 			string text = Clean(raw).Trim();
 			if (text.Length == 0)
@@ -238,34 +288,103 @@ namespace OstranautsMP
 				Apart.SyncCommand();
 				return;
 			}
+			if (text.Equals("/fixships", StringComparison.OrdinalIgnoreCase))
+			{
+				Mirror.FixShipsCommand();
+				return;
+			}
+			if (text.Equals("/pda", StringComparison.OrdinalIgnoreCase))
+			{
+				_pdaMode = !_pdaMode;
+				return;
+			}
+			if (text.StartsWith("/pda ", StringComparison.OrdinalIgnoreCase))
+			{
+				text = text.Substring(5).Trim();
+				toPda = true;
+				if (text.Length == 0)
+				{
+					return;
+				}
+			}
 			CondOwner me = MyCharacter();
 			double epoch = WorldSync.InGame ? StarSystem.fEpoch : double.NaN;
 			string id = (me != null) ? me.strID : "";
+			if (!toPda && me == null)
+			{
+				// Nobody to say it: it goes to the PDA instead.
+				toPda = true;
+			}
+			string msgId = PdaLog.NewId();
+			string profileId = (Profile.Current != null) ? Profile.Current.Id : "";
+			string name = SpeakerName(id, Plugin.PlayerName).Replace("|", "/");
 			if (Plugin.Net.Connected)
 			{
-				Plugin.Net.Send("CHAT " + id + "|" + (double.IsNaN(epoch) ? "" : epoch.ToString("R", Inv)) + "|" + text);
+				if (toPda)
+				{
+					Plugin.Net.Send("CHAT " + msgId + "|" + profileId + "|" + (double.IsNaN(epoch) ? "" : epoch.ToString("R", Inv)) + "|" + Plugin.MarkColorHex + "|" + name + "|" + text);
+				}
+				else
+				{
+					Plugin.Net.Send("SAY " + id + "|" + (double.IsNaN(epoch) ? "" : epoch.ToString("R", Inv)) + "|" + text);
+				}
 			}
-			else
+			else if (Plugin.Net.CurrentMode == NetSession.Mode.None)
 			{
 				AddSystem("Not connected");
 			}
-			AddChat(id, Plugin.PlayerName, text, epoch);
+			if (toPda)
+			{
+				AddRecord(msgId, profileId, name, text, epoch, Plugin.MarkColorHex);
+			}
+			else
+			{
+				AddSpeech(id, Plugin.PlayerName, text);
+			}
 		}
 
-		// A chat line and bubble; "/me ..." becomes an action of the speaker's character.
-		private static void AddChat(string characterId, string player, string text, double epoch)
+		// In the game the character's name, in the menus the player's.
+		private static string SpeakerName(string characterId, string player)
 		{
+			CondOwner co;
+			return (!string.IsNullOrEmpty(characterId) && DataHandler.mapCOs.TryGetValue(characterId, out co) && co != null && !string.IsNullOrEmpty(co.strName)) ? co.strName : player;
+		}
+
+		// Speech: a bubble over the character, kept nowhere. "/me ..." is an action.
+		private static void AddSpeech(string characterId, string player, string text)
+		{
+			string speaker = SpeakerName(characterId, player);
 			string rest;
 			if (IsAction(text, out rest))
 			{
-				CondOwner co;
-				string actor = (!string.IsNullOrEmpty(characterId) && DataHandler.mapCOs.TryGetValue(characterId, out co) && co != null && !string.IsNullOrEmpty(co.strName)) ? co.strName : player;
-				AddLine(actor, rest, epoch, false, action: true);
-				AddBubble(characterId, actor, rest, action: true);
+				AddBubble(characterId, speaker, rest, action: true);
 				return;
 			}
-			AddLine(player, text, epoch, false);
-			AddBubble(characterId, player, text);
+			AddBubble(characterId, speaker, text);
+		}
+
+		// A PDA message: into this player's profile's log (PdaLog), in the game and in the menus.
+		private static void AddRecord(string msgId, string profileId, string speaker, string text, double epoch, string hex)
+		{
+			string rest;
+			bool action = IsAction(text, out rest);
+			if (action)
+			{
+				text = rest;
+			}
+			PdaLog.Entry e = new PdaLog.Entry();
+			e.Id = msgId;
+			e.Ticks = DateTime.UtcNow.Ticks;
+			e.Epoch = epoch;
+			e.Hex = hex;
+			e.ProfileId = profileId;
+			e.Action = action;
+			e.Name = speaker;
+			e.Text = text;
+			PdaLog.Add(e);
+			Version++;
+			_scrollToEnd = true;
+			Plugin.Log.LogInfo("[PDA] " + speaker + ": " + text);
 		}
 
 		private static bool IsAction(string text, out string rest)
@@ -300,14 +419,17 @@ namespace OstranautsMP
 
 		internal static void AddSystem(string text)
 		{
-			AddLine(null, text, WorldSync.InGame ? StarSystem.fEpoch : double.NaN, true);
+			AddLine(null, text, WorldSync.InGame ? StarSystem.fEpoch : double.NaN, true, false, new Color(0.6f, 0.6f, 0.6f));
 		}
 
-		private static void AddLine(string name, string text, double epoch, bool system, bool action = false)
+		private static void AddLine(string name, string text, double epoch, bool system, bool action, Color color)
 		{
 			Line l;
+			l.Color = color;
+			l.Id = ++_nextLineId;
 			l.Action = action;
 			l.Epoch = epoch;
+			l.Ticks = DateTime.UtcNow.Ticks;
 			l.Clock = DateTime.Now.ToString("HH:mm");
 			l.Name = name;
 			l.Text = text;
@@ -322,13 +444,101 @@ namespace OstranautsMP
 			Plugin.Log.LogInfo("[Chat] " + (system ? "* " : (action ? ("* " + name + " ") : (name + ": "))) + text);
 		}
 
-		// The last <max> lines; in game with the in-game time they were sent at (real time for lines sent from menus).
+		// For the PDA page and the menu window: the profile's saved messages (PdaLog) and this session's notices, by real
+		// time.
+		internal struct Record
+		{
+			public string Id;
+
+			public double Epoch;
+
+			public long Ticks;
+
+			public string Clock;
+
+			public string Name;
+
+			public string Text;
+
+			public bool System;
+
+			public bool Action;
+
+			public Color Color;
+
+			public string ProfileId;
+		}
+
+		internal static int RecordsVersion => Version + PdaLog.Version * 7919;
+
+		internal static List<Record> Records()
+		{
+			List<Record> list = new List<Record>();
+			foreach (Line l in Lines)
+			{
+				Record r;
+				r.Id = "n:" + l.Id;
+				r.Epoch = l.Epoch;
+				r.Ticks = l.Ticks;
+				r.Clock = l.Clock;
+				r.Name = l.Name;
+				r.Text = l.Text;
+				r.System = true;
+				r.Action = false;
+				r.Color = l.Color;
+				r.ProfileId = null;
+				list.Add(r);
+			}
+			foreach (PdaLog.Entry e in PdaLog.Read())
+			{
+				Record r;
+				r.Id = "m:" + e.Id;
+				r.Epoch = e.Epoch;
+				r.Ticks = e.Ticks;
+				r.Clock = new DateTime(e.Ticks, DateTimeKind.Utc).ToLocalTime().ToString("HH:mm");
+				r.Name = e.Name;
+				r.Text = e.Text;
+				r.System = false;
+				r.Action = e.Action;
+				Color c;
+				r.Color = ColorUtility.TryParseHtmlString("#" + e.Hex, out c) ? c : Color.white;
+				r.ProfileId = e.ProfileId;
+				list.Add(r);
+			}
+			list.Sort((Record a, Record b) => a.Ticks.CompareTo(b.Ticks));
+			return list;
+		}
+
+		internal static void DeleteRecord(string id)
+		{
+			if (id.StartsWith("m:", StringComparison.Ordinal))
+			{
+				PdaLog.Remove(id.Substring(2));
+				return;
+			}
+			int n;
+			if (int.TryParse(id.Substring(2), out n))
+			{
+				Lines.RemoveAll((Line l) => l.Id == n);
+				Version++;
+			}
+		}
+
+		internal static void ClearRecords()
+		{
+			PdaLog.Clear();
+			Lines.Clear();
+			Version++;
+		}
+
+		// The last <max> records; in game with the in-game time they were sent at (real time for those sent from menus).
 		internal static string Format(bool inGame, int max)
 		{
+			List<Record> records = Records();
 			StringBuilder sb = new StringBuilder();
-			for (int i = Math.Max(0, Lines.Count - max); i < Lines.Count; i++)
+			for (int i = Math.Max(0, records.Count - max); i < records.Count; i++)
 			{
-				Line l = Lines[i];
+				Record l = records[i];
 				string stamp = (inGame && !double.IsNaN(l.Epoch)) ? MathUtils.GetUTCFromS(l.Epoch) : l.Clock;
 				if (sb.Length > 0)
 				{
@@ -490,6 +700,15 @@ namespace OstranautsMP
 				AddBlocking(_menuRect);
 				focusedNow = GUI.GetNameOfFocusedControl() == InputControl;
 			}
+			if (_quickOpen && !WorldSync.InGame)
+			{
+				_quickOpen = false;
+			}
+			if (_quickOpen)
+			{
+				DrawQuick();
+				focusedNow = focusedNow || GUI.GetNameOfFocusedControl() == QuickControl;
+			}
 			if (WorldSync.InGame)
 			{
 				EnsureStyles();
@@ -500,6 +719,151 @@ namespace OstranautsMP
 			{
 				_focused = focusedNow;
 			}
+		}
+
+		// Commands offered over the quick chat: what's typed so far picks them, a click or Tab puts one in.
+		private static readonly string[][] QuickCommands =
+		{
+			new[] { "/pda", "switch between speaking and the PDA chat" },
+			new[] { "/pda ", "write one message to the PDA chat" },
+			new[] { "/me ", "an action of your character" },
+			new[] { "/sync", "host: take the other player's place now" },
+			new[] { "/fixships", "host: give ships back to the captain" }
+		};
+
+		private static List<string[]> QuickMatches()
+		{
+			List<string[]> list = new List<string[]>();
+			string t = _quickText ?? "";
+			if (t.Length > 0 && !t.StartsWith("/", StringComparison.Ordinal))
+			{
+				return list;
+			}
+			foreach (string[] c in QuickCommands)
+			{
+				// Once a command and its text are being typed, nothing more to offer.
+				if (t.Length > c[0].Length && t.StartsWith(c[0], StringComparison.OrdinalIgnoreCase) && c[0].EndsWith(" ", StringComparison.Ordinal))
+				{
+					return new List<string[]>();
+				}
+				if (c[0].StartsWith(t, StringComparison.OrdinalIgnoreCase))
+				{
+					list.Add(c);
+				}
+			}
+			return list;
+		}
+
+		private static void PickQuick(string cmd)
+		{
+			if (cmd == "/pda")
+			{
+				// Switches right away, the field stays open.
+				_pdaMode = !_pdaMode;
+				_quickText = "";
+			}
+			else
+			{
+				_quickText = cmd;
+			}
+			_quickCaretToEnd = true;
+		}
+
+		private static bool _quickCaretToEnd;
+
+		private static GUIStyle _quickHint;
+
+		private static void DrawQuick()
+		{
+			Event e = Event.current;
+			List<string[]> matches = QuickMatches();
+			// The Enter that opened it arrives here in the same frame; it isn't the one that sends.
+			if (e.type == EventType.KeyDown && Time.frameCount != _quickOpenedFrame)
+			{
+				if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
+				{
+					if (_quickText.Trim().Length > 0)
+					{
+						SendText(_quickText);
+					}
+					_quickOpen = false;
+					_quickText = "";
+					e.Use();
+					return;
+				}
+				if (e.keyCode == KeyCode.Escape)
+				{
+					_quickOpen = false;
+					_quickText = "";
+					e.Use();
+					return;
+				}
+				if (e.keyCode == KeyCode.Tab && matches.Count > 0 && _quickText.Length > 0)
+				{
+					PickQuick(matches[0][0]);
+					e.Use();
+					return;
+				}
+			}
+			float w = Mathf.Min(560f, Screen.width - 40f);
+			float x = (Screen.width - w) / 2f;
+			Rect r = new Rect(x + 64f, Screen.height - 120f, w - 64f, 34f);
+			Rect mode = new Rect(x, r.y, 60f, r.height);
+			GUISkin prev = MenuLook.Use();
+			try
+			{
+				if (_quickHint == null)
+				{
+					_quickHint = new GUIStyle(GUI.skin.label);
+					_quickHint.richText = true;
+					_quickHint.alignment = TextAnchor.MiddleLeft;
+					_quickHint.fontSize = 18;
+				}
+				// Where it goes: said aloud, or the PDA chat.
+				Color c = GUI.color;
+				bool pda = _pdaMode || _quickText.StartsWith("/pda ", StringComparison.OrdinalIgnoreCase);
+				GUI.color = pda ? new Color(0.6f, 0.85f, 1f) : Color.white;
+				if (GUI.Button(mode, pda ? "PDA" : "SAY"))
+				{
+					_pdaMode = !_pdaMode;
+				}
+				GUI.color = c;
+				// The offered commands, listed upwards from the field.
+				float y = r.y;
+				foreach (string[] m in matches)
+				{
+					y -= 32f;
+					Rect row = new Rect(r.x, y, r.width, 30f);
+					GUI.Box(row, GUIContent.none);
+					string label = (m[0] == "/pda") ? (_pdaMode ? "back to speaking" : "switch to the PDA chat") : m[1];
+					if (GUI.Button(row, "<b>" + m[0].Trim() + "</b>  " + label, _quickHint))
+					{
+						PickQuick(m[0]);
+					}
+					AddBlocking(row);
+				}
+				GUI.SetNextControlName(QuickControl);
+				_quickText = GUI.TextField(r, _quickText, 300);
+				if (GUI.GetNameOfFocusedControl() != QuickControl)
+				{
+					GUI.FocusControl(QuickControl);
+				}
+				if (_quickCaretToEnd && e.type == EventType.Repaint)
+				{
+					TextEditor te = GUIUtility.GetStateObject(typeof(TextEditor), GUIUtility.keyboardControl) as TextEditor;
+					if (te != null)
+					{
+						te.MoveTextEnd();
+					}
+					_quickCaretToEnd = false;
+				}
+			}
+			finally
+			{
+				MenuLook.Restore(prev);
+			}
+			AddBlocking(r);
+			AddBlocking(mode);
 		}
 
 		// Collected on the Repaint pass (OnGUI runs several times a frame); read next frame by MouseOverModUI.
@@ -935,8 +1299,19 @@ namespace OstranautsMP
 				CrewSim.Typing = false;
 				_weSetTyping = false;
 			}
-			// Ping: ~ (Ё) drops a mark where the mouse points.
 			Keyboard kb = Keyboard.current;
+			// Quick chat: Enter opens it when nothing else is being typed into; also while hosting with nobody connected yet.
+			if (!_quickOpen && WorldSync.InGame && Plugin.Net.CurrentMode != NetSession.Mode.None && kb != null && (kb.enterKey.wasPressedThisFrame || kb.numpadEnterKey.wasPressedThisFrame) && !CrewSim.Typing)
+			{
+				_quickOpen = true;
+				_quickText = "";
+				_quickOpenedFrame = Time.frameCount;
+				// Right away, so the first letters typed don't reach the game's hotkeys.
+				CrewSim.Typing = true;
+				_weSetTyping = true;
+				_focused = true;
+			}
+			// Ping: ~ (Ё) drops a mark where the mouse points.
 			if (WorldSync.InGame && kb != null && kb.backquoteKey.wasPressedThisFrame && !CrewSim.Typing && !MouseOverModUI)
 			{
 				Camera cam = GameCamera;

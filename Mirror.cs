@@ -211,6 +211,11 @@ namespace OstranautsMP
 					Plugin.Net.Send("LOOK " + oldId + "|" + Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonMapper.ToJson(look))));
 				}
 				Plugin.Log.LogInfo("Mirror: " + oldId + ((oldId != co.strID) ? (" is now " + co.strID) : "") + ", looks sent");
+				// The client's own character made from its profile: the profile follows, so the next join keeps this.
+				if (Plugin.Net.CurrentMode == NetSession.Mode.Client && co == CrewClaim.ClientMine && Profile.Current != null && Profile.OwnerOf(co) == Profile.Current.Id)
+				{
+					Profile.UpdateFrom(look);
+				}
 			}
 			catch (Exception e)
 			{
@@ -220,7 +225,7 @@ namespace OstranautsMP
 
 		// Null if the name can be used (the game's own rules: not empty, up to 50 characters, no characters a file
 		// name can't have, nobody else called that).
-		private static string NameProblem(string name, CondOwner co)
+		internal static string NameProblem(string name, CondOwner co)
 		{
 			if (string.IsNullOrEmpty(name))
 			{
@@ -281,9 +286,27 @@ namespace OstranautsMP
 					}
 				}
 			}
+			// Only ships registered to them. The game's own rename (character creation) moves every ship in their list,
+			// but for a crew member that list is the ships they live on, the captain's included.
 			foreach (string reg in new List<string>(co.GetShipsOwned()))
 			{
-				CrewSim.system.RegisterShipOwner(reg, newName);
+				if (CrewSim.system.GetShipOwner(reg) == old)
+				{
+					CrewSim.system.RegisterShipOwner(reg, newName);
+				}
+			}
+			// Faction member lists are by name too.
+			Dictionary<string, JsonFaction> factions = AccessTools.Field(typeof(StarSystem), "dictFactions").GetValue(CrewSim.system) as Dictionary<string, JsonFaction>;
+			if (factions != null)
+			{
+				foreach (JsonFaction jf in factions.Values)
+				{
+					int i = (jf != null && jf.aMembers != null) ? jf.aMembers.IndexOf(old) : -1;
+					if (i >= 0)
+					{
+						jf.aMembers[i] = newName;
+					}
+				}
 			}
 			// Left out by the game: the crew roster and the books are keyed by name.
 			JsonCompany company = co.Company;
@@ -299,6 +322,69 @@ namespace OstranautsMP
 			Apart.Renamed(old, newName);
 			MonoSingleton<GUIRenderTargets>.Instance.ResetLoadedPortraits();
 			Plugin.Log.LogInfo("Renamed " + old + " to " + newName);
+		}
+
+		// A client's character is crew, never a ship's owner. A renaming in 0.24.0-0.25.1 registered to them every ship
+		// they lived on, so the captain lost them (the nav station then asks to contact the office). Those ships go back
+		// to the host's character: by itself whenever a game is loaded here, or with "/fixships" in chat.
+		private static bool _fixedThisLoad;
+
+		// Called from Plugin.Update.
+		internal static void Update()
+		{
+			if (!WorldSync.InGame)
+			{
+				_fixedThisLoad = false;
+				return;
+			}
+			if (_fixedThisLoad || Plugin.Net.CurrentMode == NetSession.Mode.Client || CrewSim.coPlayer == null)
+			{
+				return;
+			}
+			_fixedThisLoad = true;
+			int n = FixShips(quiet: true);
+			if (n > 0)
+			{
+				Chat.AddSystem(n + " ship(s) registered to a client's character were given back to " + CrewSim.coPlayer.strName);
+			}
+		}
+
+		internal static void FixShipsCommand()
+		{
+			if (Plugin.Net.CurrentMode == NetSession.Mode.Client || !WorldSync.InGame || CrewSim.coPlayer == null)
+			{
+				Chat.AddSystem("/fixships: only the host, in the game");
+				return;
+			}
+			FixShips(quiet: false);
+		}
+
+		private static int FixShips(bool quiet)
+		{
+			Dictionary<string, string> owners = AccessTools.Field(typeof(StarSystem), "dictShipOwners").GetValue(CrewSim.system) as Dictionary<string, string>;
+			if (owners == null)
+			{
+				return 0;
+			}
+			List<string> moved = new List<string>();
+			foreach (KeyValuePair<string, string> kv in new List<KeyValuePair<string, string>>(owners))
+			{
+				CondOwner owner;
+				if (kv.Value != CrewSim.coPlayer.strID && DataHandler.mapCOs.TryGetValue(kv.Value, out owner) && owner != null && owner.GetCondAmount(Budget.MarkCond) >= 1.0)
+				{
+					CrewSim.system.RegisterShipOwner(kv.Key, CrewSim.coPlayer.strID);
+					moved.Add(kv.Key + " (from " + kv.Value + ")");
+				}
+			}
+			if (!quiet)
+			{
+				Chat.AddSystem("/fixships: " + ((moved.Count > 0) ? ("back to " + CrewSim.coPlayer.strName + ": " + string.Join(", ", moved.ToArray())) : "nothing to fix"));
+			}
+			if (moved.Count > 0)
+			{
+				Plugin.Log.LogInfo("Ships given back to " + CrewSim.coPlayer.strName + ": " + string.Join(", ", moved.ToArray()));
+			}
+			return moved.Count;
 		}
 
 		private static void RenameInLedger(string old, string newName)
@@ -409,7 +495,8 @@ namespace OstranautsMP
 			return true;
 		}
 
-		private static void Apply(CondOwner co, Look look)
+		// A profile or the other player's mirror: rename (if the name is free) and new looks.
+		internal static void Apply(CondOwner co, Look look)
 		{
 			if (!string.IsNullOrEmpty(look.NewId) && look.NewId != co.strID)
 			{

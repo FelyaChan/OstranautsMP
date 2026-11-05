@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using HarmonyLib;
+using LitJson;
 using UnityEngine;
 
 namespace OstranautsMP
@@ -10,7 +12,12 @@ namespace OstranautsMP
 	// selecting another person is blocked and GetSelectedCrew always returns the claimed character, so clicks, WASD,
 	// the radial menu, the crew bar and visibility all work from that character.
 	//
-	// Protocol: client -> host CLAIM <id>; host -> client CLAIMED <id> or CLAIM_DENIED <reason>.
+	// The client's profile (Profile) comes with the claim: the host makes the crew member that character (looks,
+	// name) and marks them as the profile's; a crew member another profile has is refused. The client applies the
+	// same change when the host confirms.
+	//
+	// Protocol: client -> host CLAIM <id>|<profile ID>|<base64 JSON Mirror.Look, or empty>;
+	//           host -> client CLAIMED <id as picked>|<id now> or CLAIM_DENIED <reason>.
 	public static class CrewClaim
 	{
 		private const int WindowId = 0x0B4F2;
@@ -25,6 +32,9 @@ namespace OstranautsMP
 		private static bool _wasInGame;
 
 		private static Rect _rect = new Rect(0f, 0f, 260f, 10f);
+
+		// Client: the profile sent with the claim, applied when the host confirms.
+		private static Mirror.Look _claimLook;
 
 		// Host.
 		private static string _claimed;
@@ -360,14 +370,21 @@ namespace OstranautsMP
 			{
 				GUILayout.Label("No crew members besides the host's character.");
 			}
+			string me = (Profile.Current != null) ? Profile.Current.Id : null;
 			foreach (CondOwner co in crew)
 			{
-				if (GUILayout.Button(co.strName))
+				string owner = Profile.OwnerOf(co);
+				bool taken = owner != null && owner != me;
+				GUI.enabled = !taken;
+				if (GUILayout.Button(co.strName + (taken ? " (another player's)" : ((owner != null) ? " (yours)" : ""))))
 				{
 					_mine = co.strID;
 					_status = "Waiting for host...";
-					Plugin.Net.Send("CLAIM " + co.strID);
+					Mirror.Look look = Profile.ToLook();
+					_claimLook = look;
+					Plugin.Net.Send("CLAIM " + co.strID + "|" + (me ?? "") + "|" + ((look != null) ? Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonMapper.ToJson(look))) : ""));
 				}
+				GUI.enabled = true;
 			}
 			if (_status != null)
 			{
@@ -390,7 +407,23 @@ namespace OstranautsMP
 				case "CLAIMED":
 					if (Plugin.Net.CurrentMode == NetSession.Mode.Client)
 					{
-						_mine = arg;
+						string[] f = arg.Split('|');
+						CondOwner picked;
+						if (_claimLook != null && DataHandler.mapCOs.TryGetValue(f[0], out picked) && picked != null && !picked.bDestroyed)
+						{
+							// What the host did to them: the same looks, and the name if it was free there.
+							if (f.Length > 1)
+							{
+								_claimLook.NewId = f[1];
+							}
+							Mirror.Apply(picked, _claimLook);
+							if (Profile.Current != null)
+							{
+								Profile.SetOwner(picked, Profile.Current.Id);
+							}
+						}
+						_claimLook = null;
+						_mine = (f.Length > 1) ? f[1] : f[0];
 						_confirmed = true;
 						_status = null;
 						FocusMine();
@@ -409,8 +442,23 @@ namespace OstranautsMP
 			}
 		}
 
-		private static void HostClaim(string id)
+		private static void HostClaim(string arg)
 		{
+			string[] f = arg.Split('|');
+			string id = f[0];
+			string profileId = (f.Length > 1 && f[1].Length > 0) ? f[1] : null;
+			Mirror.Look look = null;
+			if (f.Length > 2 && f[2].Length > 0)
+			{
+				try
+				{
+					look = JsonMapper.ToObject<Mirror.Look>(Encoding.UTF8.GetString(Convert.FromBase64String(f[2])));
+				}
+				catch (Exception e)
+				{
+					Plugin.Log.LogWarning("Bad profile with the claim: " + e.Message);
+				}
+			}
 			CondOwner co;
 			CondOwner player = CrewSim.coPlayer;
 			if (!WorldSync.InGame || !DataHandler.mapCOs.TryGetValue(id, out co) || co == null || co.bDestroyed)
@@ -428,9 +476,23 @@ namespace OstranautsMP
 				Plugin.Net.Send("CLAIM_DENIED not in the host's crew");
 				return;
 			}
-			_claimed = id;
+			string owner = Profile.OwnerOf(co);
+			if (owner != null && owner != profileId)
+			{
+				Plugin.Net.Send("CLAIM_DENIED " + co.strName + " is another player's character");
+				return;
+			}
+			if (profileId != null)
+			{
+				Profile.SetOwner(co, profileId);
+			}
+			if (look != null)
+			{
+				Mirror.Apply(co, look);
+			}
+			_claimed = co.strID;
 			Budget.MarkClientCharacter(co);
-			Plugin.Net.Send("CLAIMED " + id);
+			Plugin.Net.Send("CLAIMED " + id + "|" + co.strID);
 			Plugin.Log.LogInfo("Client plays as " + co.strName);
 		}
 	}

@@ -16,6 +16,7 @@ namespace OstranautsMP
 	// Protocol (client -> host):
 	//   READY                                           client finished loading into the game
 	//   PAUSE <1|0>                                     the client pressed the pause key
+	//   LOADP ...                                       see ClientLoad
 	//
 	// The client keeps running its own simulation; positions and animation state are overridden in LateUpdate,
 	// after the game's Pathfinder has moved everyone for the frame.
@@ -87,7 +88,7 @@ namespace OstranautsMP
 		public static void Patch(Harmony harmony)
 		{
 			HarmonyMethod block = new HarmonyMethod(typeof(WorldSync), nameof(BlockOnClientPrefix));
-			harmony.Patch(AccessTools.PropertySetter(typeof(CrewSim), "Paused"), prefix: block);
+			harmony.Patch(AccessTools.PropertySetter(typeof(CrewSim), "Paused"), prefix: new HarmonyMethod(typeof(WorldSync), nameof(PausedPrefix)));
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "TimeScaleMult"), prefix: block);
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "ResetTimeScale"), prefix: block);
 			harmony.Patch(AccessTools.Method(typeof(CondOwner), "SetAnimState"), prefix: new HarmonyMethod(typeof(WorldSync), nameof(SetAnimStatePrefix)));
@@ -122,6 +123,12 @@ namespace OstranautsMP
 			return false;
 		}
 
+		// Pause: the client's rule below, and the host can't unpause while the client loads (ClientLoad).
+		private static bool PausedPrefix(bool value)
+		{
+			return BlockOnClientPrefix() && !ClientLoad.BlocksUnpause(value);
+		}
+
 		// The client can't change pause or time scale; only the host's state is applied.
 		private static bool BlockOnClientPrefix()
 		{
@@ -139,6 +146,7 @@ namespace OstranautsMP
 			{
 				_hasHostTime = false;
 				_wasInGame = false;
+				ClientLoad.End();
 				Targets.Clear();
 				_sentScale = -1f;
 				CondSync.ResetSnapshot();
@@ -162,6 +170,7 @@ namespace OstranautsMP
 			}
 			if (net.CurrentMode == NetSession.Mode.Host)
 			{
+				ClientLoad.HostUpdate();
 				HostSendTime(now);
 				if (now >= _nextPos)
 				{
@@ -263,6 +272,7 @@ namespace OstranautsMP
 					if (mode == NetSession.Mode.Host)
 					{
 						// The client has just loaded a save; send it everyone's conditions again.
+						ClientLoad.End();
 						CondSync.ResetSnapshot();
 						SaveSync.ResetLocation();
 						Apart.OnClientReady();

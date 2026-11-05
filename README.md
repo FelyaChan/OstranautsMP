@@ -48,7 +48,7 @@ Not been tested on more recent builds.
 * Falls back to resending the save if a location change can't be synced otherwise.
 
 ### Communication
-* Chat: a window in the main menu and a **CHAT** app on the PDA (game-styled), with in-game timestamps.
+* Speech on Enter (bubbles over characters), and PDA messages in a **CHAT** app on the PDA (sender's avatar and colour, in-game time, delete one or all; kept with your profile across games); a chat window in the main menu.
 * Speech bubbles over characters, typed out typewriter-style with the speaker's name; off-screen bubbles point to the speaker.
 * Player names are coloured by how the character is doing (green → red).
 * **Ping** with the `~` key: marks a spot or an item under the cursor with its name; on a person it rings them and follows them. Visible to both, with an edge arrow when off-screen. Each player picks their ping colour.
@@ -61,6 +61,7 @@ Not been tested on more recent builds.
 * The client's character can't quit the crew.
 
 ### Your character
+* **Profile:** make your character in the main menu (**Create character** in the Multiplayer window): face, skin, body type, pronouns, name; the portrait becomes your avatar (also in the PDA chat). Your PDA messages are kept with the profile too, across games and sessions. When you join and pick a crew member, they become that character (their skills and items stay). A crew member is then yours: other players can't pick them. Changes you make at a mirror in the game are saved back to your profile. *(experimental)*
 * **Mirror:** at any sink, **View Mirror** lets you change your own character's whole look (face, skin, body) and name. The other player sees the change. Each player can only edit their own character. Renaming keeps skills, items, salary and crew membership. *(experimental)*
 * **Lockers:** **Make it mine** on an installed container (locker, cabinet, fridge) adds your character's name to it; **Give it up** removes it. It's a label only, nobody is locked out.
 
@@ -94,17 +95,23 @@ If the client joins while you're already in the game, the game pauses and sends 
 2. Enter your Player Name.
 3. Enter the Host's IP address and port (`7777`), then click **Join**.
 4. The window stays open while you wait: the host's save is downloaded and loaded automatically.
-5. In the game, a **Choose your character** window appears: pick a crew member. This character becomes yours permanently (they also can't quit the crew).
+   While the client loads, the host's game stays paused, with a progress panel at the top; it can be unpaused once the client is in.
+5. In the game, a **Choose your character** window appears: pick a crew member. If you made a character profile, they take its looks and name. This character becomes yours permanently: nobody else can pick them, and they can't quit the crew.
+
+Make your character before joining: **Create character** in the Multiplayer window.
 
 ### In the game
 * **Talk, give items, offer money, follow:** right-click the other player's character and use the dialogue / actions menu. Replies to the other player show up in the same menu.
 * **Emotes and Play dead:** right-click your own character (the **Emote** group); **Get up** to stop playing dead.
 * **Ping:** press `~` (the key left of `1`) — on a spot, a person or an item.
 * **Pause:** Space pauses or unpauses the game for both players.
+* **Ship ownership:** a client's character is crew and never owns a ship. If a ship ended up registered to one (a rename in 0.24.0–0.25.1), it goes back to the host's character when the host loads the game; `/fixships` in chat does it on demand.
 * **Change your looks and name:** use **View Mirror** on a sink. The new name is applied when you close the window.
 * **Lockers:** right-click an installed container → **Make it mine** / **Give it up**.
 * **Apart:** if the host leaves your place, it keeps running for you, and the host gets it back as you left it. The host can take it right away with `/sync` in chat.
-* **Chat:** the **CHAT** app on the PDA (in the main menu: the **Chat** button in the Multiplayer window).
+* **Speech:** press **Enter**, type, Enter again: your character says it in a speech bubble (Esc cancels). Not kept anywhere.
+* **PDA messages:** in the same field, `/pda text` sends a message to the **CHAT** app on the PDA. `/pda` alone, or the **SAY/PDA** button, switches the field to PDA messages and back. The app lists them like a messenger: the sender's profile avatar and colour, the in-game time, separators between messages far apart, and buttons to delete a message or the whole chat. A message from the other player pops up in the bottom right (click to open the chat). Each player's messages are kept with their profile on their own computer (`BepInEx/config/OstranautsMP_pda.txt`), the same history in every game. In the main menu: the **Chat** button in the Multiplayer window.
+* The commands are listed above the field when it opens: `/pda`, `/me`, `/sync`, `/fixships`.
 * **Money:** the **BUDGET** app on the PDA — the host sets salary and gives money; the client sees their wallet and ledger. Salary is paid by the host in the game's finance screen (the cash button at the bottom).
 * **Piloting:** game speed is the host's. Either player can fly from the nav station; if both steer, the host's input wins.
 

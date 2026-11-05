@@ -3,6 +3,103 @@
 All notable changes to the Ostranauts Multiplayer Mod.
 Host and client must run the same version.
 
+## [0.29.0] - 2026-11-05
+
+### Added
+- PDA message notification: when the other player writes to the PDA chat and it isn't open, a box with their avatar, name and the start of the text shows in the bottom right for a few seconds, with a sound. Click it to open the chat.
+
+### Fixed
+- Client: the work progress bar over a person sometimes disappeared while the host's work went on. The client's own AI no longer turns off bars the host runs; only the host does, or the bar running out.
+
+## [0.28.0] - 2026-11-05
+
+### Added
+- While the client loads a save the host sent, the host's game stays paused and can't be unpaused. A panel at the top shows the progress: sending the save, then the client's loading screen. When the client is in the game, the panel goes away and the game can be unpaused. Disconnecting ends the wait too.
+
+## [0.27.1] - 2026-11-05
+
+### Changed
+- PDA chat: bigger messages, avatars and text.
+- Quick chat: bigger command suggestions.
+- Mod windows: the title (MULTIPLAYER, CHAT…) sits at the top edge of the window.
+
+## [0.27.0] - 2026-11-05
+
+### Changed
+- PDA messages are kept with your profile on your computer, not in the save: one history across all games and sessions, the main menu chat included. Each player keeps their own copy; deleting only affects yours.
+- The CHAT app shows each sender's profile avatar. Players send their avatar to each other on connect and when their looks change; received avatars are kept, so old messages keep them.
+- Separator lines use in-game minutes within one game and real minutes otherwise.
+
+### Notes
+- Files in `BepInEx/config`: `OstranautsMP_pda.txt` (the messages, last 200) and the `OstranautsMP_avatars` folder (other players' avatars).
+- Messages saved into characters by 0.26.1 stay in those saves but are no longer shown.
+
+## [0.26.1] - 2026-11-05
+
+### Added
+- PDA messages are kept with each player's character in the save. The host's save holds both players' logs; deleting on the client deletes in the saved copy too.
+- The CHAT app shows each sender's portrait next to their messages, like a messenger.
+
+### Notes
+- Notices (joined, left, apart…) are shown in the PDA for the session only, they aren't saved.
+
+## [0.26.0] - 2026-11-05
+
+### Changed
+- Two kinds of chat:
+  - **Speech:** Enter in the game. Your character says it in a speech bubble. It isn't kept anywhere.
+  - **PDA messages:** `/pda text` in the quick chat, or switch the quick chat to PDA mode (`/pda` alone, or the SAY/PDA button next to the field). The main menu chat and notices go there too.
+- The quick chat lists its commands when it opens and filters them as you type a `/`. Click one or press Tab to use it.
+- The PDA **CHAT** app is now a list of records:
+  - each message shows the sender's colour and name, the in-game time and the text;
+  - a line separates messages more than 5 in-game minutes apart;
+  - each message can be deleted, and **Delete chat** clears them all;
+  - nothing is typed in the app itself.
+
+## [0.25.6] - 2026-11-05
+
+### Changed
+- In the game, chat lines and speech bubbles are under the speaker's character's name instead of the player's name. The player's name is still used in the main menu chat and in join/leave notices.
+
+## [0.25.5] - 2026-11-05
+
+### Fixed
+- Quick chat didn't open for a host with nobody connected yet. It now works whenever you host or have joined.
+
+## [0.25.4] - 2026-11-05
+
+### Added
+- Quick chat: **Enter** in the game opens a one-line field at the bottom of the screen. Enter says it (a speech bubble, and a line in the chat), Esc closes it. `/me` and commands work there too.
+
+## [0.25.3] - 2026-11-05
+
+### Changed
+- A client's character is crew and never owns a ship. Ships registered to one go back to the host's character by themselves whenever the host loads a game, and the chat says so. `/fixships` still does it on demand.
+
+## [0.25.2] - 2026-11-05
+
+### Fixed
+- Renaming a crew member (mirror, profile) registered to them every ship they lived on, the captain's included. The host then lost the ship, and the nav station asked to contact the office. Now only ships actually registered to the renamed person follow the name.
+- Renaming now also updates faction member lists.
+
+### Added
+- `/fixships` in chat (host): ships registered to a client's character go back to the host's character. This repairs saves affected by the bug above.
+
+## [0.25.1] - 2026-11-05
+
+### Added
+- Changes the client makes to their own character at a mirror in the game go back into their profile and avatar, so the next join keeps them.
+
+## [0.25.0] - 2026-11-05
+
+### Added
+- Character profile, made in the main menu: **Create / Edit character** in the Multiplayer window.
+  - Face part by part (as in the game's own editor), skin, random face, body type, pronouns, attraction, name.
+  - A flat portrait preview, saved as your avatar and shown in the Multiplayer window.
+  - Saved on your computer: `BepInEx/config/OstranautsMP_profile.json` and `OstranautsMP_avatar.png`.
+- When you join and pick a crew member, they become your profile's character: looks and name. Their skills, traits and items stay theirs.
+- A crew member picked with a profile belongs to it. Nobody else can pick them; you can again next time. A crew member a client played before profiles existed goes to the first profile that picks them.
+
 ## [0.24.3] - 2026-11-05
 
 ### Changed

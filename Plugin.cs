@@ -19,7 +19,7 @@ namespace OstranautsMP
 
 		public const string PluginName = "Ostranauts Multiplayer";
 
-		public const string Version = "0.24.3";
+		public const string Version = "0.29.0";
 
 		internal static ManualLogSource Log;
 
@@ -104,6 +104,7 @@ namespace OstranautsMP
 			_markColor = Config.Bind("General", "MarkColor", MarkPalette[0], "Colour of your pings (~ key), hex RRGGBB.");
 			_highlights = Config.Bind("General", "Highlights", true, "Your lockers light up in your colour under the mouse; the other player's character has a faint aura in their colour while yours can see them.");
 			Apart.Init(Config);
+			Profile.Load();
 			_address = _lastAddress.Value;
 			_port = _lastPort.Value;
 			Net.OnMessage = RouteMessage;
@@ -127,6 +128,7 @@ namespace OstranautsMP
 			PlayerInteractions.Patch(harmony);
 			Apart.Patch(harmony);
 			WorkProgress.Patch(harmony);
+			ClientLoad.Patch(harmony);
 			Ownership.Patch(harmony);
 			Mirror.Patch(harmony);
 			RemoveUnitySingleInstance();
@@ -211,6 +213,10 @@ namespace OstranautsMP
 			{
 				ShipSync.OnBinary(data);
 			}
+			else if (cmd == "AVATAR")
+			{
+				PdaLog.OnAvatar(data);
+			}
 			else
 			{
 				SaveSync.OnBinary(cmd, data);
@@ -219,7 +225,7 @@ namespace OstranautsMP
 
 		private static void RouteMessage(string cmd, string arg)
 		{
-			if (!WorldSync.OnMessage(cmd, arg, Time.unscaledTime) && !OrderSync.OnMessage(cmd, arg) && !ItemSync.OnMessage(cmd, arg, Time.unscaledTime) && !CrewClaim.OnMessage(cmd, arg) && !Chat.OnMessage(cmd, arg) && !DockSync.OnMessage(cmd, arg) && !ShipSync.OnMessage(cmd, arg, Time.unscaledTime) && !Budget.OnMessage(cmd, arg) && !PlayerInteractions.OnMessage(cmd, arg) && !Apart.OnMessage(cmd, arg) && !WorkProgress.OnMessage(cmd, arg) && !Ownership.OnMessage(cmd, arg) && !Mirror.OnMessage(cmd, arg) && !Highlights.OnMessage(cmd, arg))
+			if (!WorldSync.OnMessage(cmd, arg, Time.unscaledTime) && !OrderSync.OnMessage(cmd, arg) && !ItemSync.OnMessage(cmd, arg, Time.unscaledTime) && !CrewClaim.OnMessage(cmd, arg) && !Chat.OnMessage(cmd, arg) && !DockSync.OnMessage(cmd, arg) && !ShipSync.OnMessage(cmd, arg, Time.unscaledTime) && !Budget.OnMessage(cmd, arg) && !PlayerInteractions.OnMessage(cmd, arg) && !Apart.OnMessage(cmd, arg) && !WorkProgress.OnMessage(cmd, arg) && !Ownership.OnMessage(cmd, arg) && !Mirror.OnMessage(cmd, arg) && !Highlights.OnMessage(cmd, arg) && !ClientLoad.OnMessage(cmd, arg))
 			{
 				SaveSync.OnMessage(cmd, arg);
 			}
@@ -255,8 +261,13 @@ namespace OstranautsMP
 			Budget.Update(Time.unscaledTime);
 			PlayerInteractions.Update(Time.unscaledTime);
 			Highlights.Update(Time.unscaledTime);
+			Mirror.Update();
 			if (Menu == null)
 			{
+				if (Profile.EditorOpen)
+				{
+					Profile.CloseEditor();
+				}
 				_windowOpen = false;
 				Chat.MenuWindowOpen = false;
 				MenuLook.Update(null, blocked: true);
@@ -271,7 +282,7 @@ namespace OstranautsMP
 			}
 			// No clicks through our windows (or the Multiplayer button) into the menu behind them. Set every frame:
 			// the menu turns bClickable back on by itself after some of its own popups.
-			bool block = _windowOpen || clientWaiting || Chat.MenuWindowOpen || Chat.MouseOverModUI;
+			bool block = _windowOpen || clientWaiting || Chat.MenuWindowOpen || Chat.MouseOverModUI || Profile.EditorOpen;
 			if (block)
 			{
 				Menu.bClickable = false;
@@ -317,8 +328,15 @@ namespace OstranautsMP
 				GUI.Label(new Rect(10f, 10f, 600f, 24f), StatusLine());
 			}
 			Highlights.OnGUI();
+			PdaChat.OnGUI();
 			CrewClaim.OnGUI();
 			Apart.OnGUI();
+			ClientLoad.OnGUI();
+			PdaNotify.OnGUI();
+			if (Menu != null)
+			{
+				Profile.OnGUI();
+			}
 			Chat.OnGUI();
 		}
 
@@ -414,6 +432,8 @@ namespace OstranautsMP
 			}
 			GUILayout.Space(8f);
 			GUILayout.Space(8f);
+			DrawProfile();
+			GUILayout.Space(8f);
 			GUILayout.Label("Ping colour (~)");
 			DrawSwatches();
 			bool hl = GUILayout.Toggle(_highlights.Value, " Highlights: your lockers, the other player's aura");
@@ -434,6 +454,29 @@ namespace OstranautsMP
 				}
 			}
 			GUI.DragWindow();
+		}
+
+		// Your character: the avatar, the name, and the editor.
+		private static void DrawProfile()
+		{
+			GUILayout.BeginHorizontal();
+			Rect r = GUILayoutUtility.GetRect(64f, 64f, GUILayout.Width(64f), GUILayout.Height(64f));
+			if (Profile.Avatar != null)
+			{
+				GUI.DrawTexture(r, Profile.Avatar, ScaleMode.ScaleToFit);
+			}
+			else
+			{
+				GUI.Box(r, "?");
+			}
+			GUILayout.BeginVertical();
+			GUILayout.Label(Profile.HasLooks ? Profile.Current.Name : "No character yet");
+			if (GUILayout.Button(Profile.HasLooks ? "Edit character" : "Create character"))
+			{
+				Profile.OpenEditor();
+			}
+			GUILayout.EndVertical();
+			GUILayout.EndHorizontal();
 		}
 
 		private static void DrawSwatches()

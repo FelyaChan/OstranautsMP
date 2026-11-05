@@ -254,7 +254,8 @@ namespace OstranautsMP
 			_skin.window.fontStyle = FontStyle.Bold;
 			_skin.window.alignment = TextAnchor.UpperCenter;
 			_skin.window.padding = new RectOffset(14, 14, 32, 14);
-			_skin.window.contentOffset = new Vector2(0f, 4f);
+			// The title is drawn inside the padding; this lifts it to the top edge.
+			_skin.window.contentOffset = new Vector2(0f, -24f);
 			_skin.box.normal.background = panel;
 			_skin.box.normal.textColor = Text;
 			_skin.label.normal.textColor = Text;

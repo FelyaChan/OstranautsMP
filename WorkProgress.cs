@@ -54,17 +54,29 @@ namespace OstranautsMP
 			Plugin.Net.Send("PROG " + us.strID + "|" + interaction.strName + "|" + ((interaction.objThem != null) ? interaction.objThem.strID : "") + "|" + duration.ToString("R", Inv) + "|" + elapsed.ToString("R", Inv) + "|" + (longOn ? LongNow(__instance).ToString("R", Inv) : "") + "|" + (longOn ? LongMax(__instance).ToString("R", Inv) : ""));
 		}
 
-		private static void DeactivatePrefix(ProgressBar __instance)
+		// Host: a bar ends, tell the client. Client: the local AI's own guesses (a walk, an empty queue, a cancel) don't
+		// turn off a bar the host runs; only the host's PROG does, or the bar running out by itself.
+		private static bool DeactivatePrefix(ProgressBar __instance)
 		{
+			if (Plugin.Net.CurrentMode == NetSession.Mode.Client)
+			{
+				if (_applying || !Plugin.Net.Connected || !WorldSync.InGame)
+				{
+					return true;
+				}
+				CondOwner person = BarUs(__instance);
+				return person == null || Apart.ClientSimulates(person);
+			}
 			if (!HostSending)
 			{
-				return;
+				return true;
 			}
 			CondOwner us = BarUs(__instance);
 			if (us != null && us.strID != null && Apart.HostSends(us))
 			{
 				Plugin.Net.Send("PROG " + us.strID + "|");
 			}
+			return true;
 		}
 
 		// Main thread. Returns false if the message isn't ours.

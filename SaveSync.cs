@@ -27,6 +27,9 @@ namespace OstranautsMP
 		// Shown in the UI; null when nothing is happening.
 		public static volatile string Progress;
 
+		// Host: how much of the save is sent, 0..1 (ClientLoad's bar).
+		public static volatile float SendFraction;
+
 		private static readonly MethodInfo LoadSelectedSave = AccessTools.Method(typeof(LoadManager), "OnLoadSelectedSave");
 
 		private static readonly MethodInfo SaveGame = AccessTools.Method(typeof(LoadManager), "SaveGame");
@@ -74,6 +77,8 @@ namespace OstranautsMP
 			Plugin.Log.LogInfo("Sending save '" + saveInfo.SaveName + "': " + files.Count + " files, " + total + " bytes");
 			// From now on the client will have every item that exists here.
 			ItemSync.ResetKnown();
+			SendFraction = 0f;
+			ClientLoad.Begin();
 			int gen = net.Generation;
 			Thread t = new Thread(() =>
 			{
@@ -92,6 +97,7 @@ namespace OstranautsMP
 						int n = Math.Min(ChunkSize, file.Value.Length - off);
 						net.SendBinary("CHUNK", file.Value, off, n);
 						sent += n;
+						SendFraction = (total > 0L) ? ((float)sent / (float)total) : 1f;
 						Progress = "Sending save: " + Mb(sent) + " / " + Mb(total) + " MB";
 					}
 				}
