@@ -25,13 +25,13 @@ Not been tested on more recent builds.
 * Version check between host and client.
 
 ### Playing together
-* The client picks a crew member and plays them; that character is marked as a multiplayer character in the save.
+* The client takes a new body made from their profile or picks a crew member and plays them; that character is marked as a multiplayer character in the save and is selected for the client right away.
 * Game speed is controlled by the host; either player can pause and unpause for both (Space).
 * Synced: positions and animations of all people, needs/stats/injuries/moods, room atmosphere (gas, pressure, temperature), in-game time.
 * Client orders and radial-menu actions are carried out by the host.
 * Items, inventory, equipment and structures are synced, with automatic desync detection and repair.
 * Clicking the host's character as the client doesn't take your character away; Caps Lock crew switching is disabled for the client.
-* The client's world is a mirror of the host's: NPC AI, story events, random encounters and recurring bills run on the host only.
+* The client's world is a mirror of the host's: NPC AI, story events, random encounters and recurring bills run on the host only. People who appear on the host while the client is in the game (hired, brought by a story or an encounter, a new body) appear on the client too.
 * Progress bars over working people (repairs, installs, eating) are shown on the client too.
 
 ### Apart mode *(experimental)*
@@ -61,7 +61,7 @@ Not been tested on more recent builds.
 * The client's character can't quit the crew.
 
 ### Your character
-* **Profile:** make your character in the main menu (**Create character** in the Multiplayer window): face, skin, body type, pronouns, name; the portrait becomes your avatar (also in the PDA chat). Your PDA messages are kept with the profile too, across games and sessions. When you join and pick a crew member, they become that character (their skills and items stay). A crew member is then yours: other players can't pick them. Changes you make at a mirror in the game are saved back to your profile. *(experimental)*
+* **Profile:** make your character in the main menu (**Create character** in the Multiplayer window): face, skin, body type, pronouns, name, and up to 5 skills on the **Skills** tab; the portrait becomes your avatar (also in the PDA chat). Your PDA messages are kept with the profile too, across games and sessions. When you join, either take a **New body** (the host makes a new crew member from your profile: looks, name and skills; no money to start with, the host gives money and salary in the BUDGET app) or pick a crew member, who becomes that character (their skills and items stay). A crew member is then yours: other players can't pick them. Changes you make at a mirror in the game are saved back to your profile. **Delete character** in the Multiplayer window removes it (type its name to confirm); crew members it had in saves stop being yours. *(experimental)*
 * **Mirror:** at any sink, **View Mirror** lets you change your own character's whole look (face, skin, body) and name. The other player sees the change. Each player can only edit their own character. Renaming keeps skills, items, salary and crew membership. *(experimental)*
 * **Lockers:** **Make it mine** on an installed container (locker, cabinet, fridge) adds your character's name to it; **Give it up** removes it. It's a label only, nobody is locked out.
 
@@ -84,7 +84,7 @@ Not been tested on more recent builds.
 2. Enter your Player Name, keep the port at `7777` (default), and click **Host**.
 3. Click **Close** to close the window; you stay hosting.
 4. **Load your save** with **CONTINUE** or from the saves list (**Note:** the mod currently *does not work with creating a new game*).
-5. Make sure your crew has **at least one more member** besides your character — that's who the client will play.
+5. The client takes a new body made from their profile, or plays one of your crew members (anyone besides your character).
 6. Open port **7777** (TCP) on your router (Port Forwarding), or use virtual network software like **Radmin VPN** / **Hamachi** so your friend can reach your PC.
 7. Share your IP address with your friend.
 
@@ -96,7 +96,7 @@ If the client joins while you're already in the game, the game pauses and sends 
 3. Enter the Host's IP address and port (`7777`), then click **Join**.
 4. The window stays open while you wait: the host's save is downloaded and loaded automatically.
    While the client loads, the host's game stays paused, with a progress panel at the top; it can be unpaused once the client is in.
-5. In the game, a **Choose your character** window appears: pick a crew member. If you made a character profile, they take its looks and name. This character becomes yours permanently: nobody else can pick them, and they can't quit the crew.
+5. In the game, a **Choose your character** window appears: take **New body** (a new crew member made from your profile, with its looks, name and skills; shown while your profile has nobody in this game) or pick a crew member. If you made a character profile, a picked crew member takes its looks and name. Your character is selected right away, so clicks give them orders. This character becomes yours permanently: nobody else can pick them, and they can't quit the crew.
 
 Make your character before joining: **Create character** in the Multiplayer window.
 

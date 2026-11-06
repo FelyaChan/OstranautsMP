@@ -19,7 +19,7 @@ namespace OstranautsMP
 
 		public const string PluginName = "Ostranauts Multiplayer";
 
-		public const string Version = "0.29.0";
+		public const string Version = "0.33.1";
 
 		internal static ManualLogSource Log;
 
@@ -82,7 +82,7 @@ namespace OstranautsMP
 
 		private bool _windowOpen;
 
-		private Rect _windowRect = new Rect(0f, 0f, 380f, 10f);
+		private Rect _windowRect = new Rect(0f, 0f, MenuLook.Big(380f), 10f);
 
 		private static readonly Rect ButtonRect = new Rect(20f, 0f, 160f, 40f);
 
@@ -213,6 +213,10 @@ namespace OstranautsMP
 			{
 				ShipSync.OnBinary(data);
 			}
+			else if (cmd == "PERSON")
+			{
+				PersonSync.OnBinary(data);
+			}
 			else if (cmd == "AVATAR")
 			{
 				PdaLog.OnAvatar(data);
@@ -307,7 +311,9 @@ namespace OstranautsMP
 			{
 				if (_windowOpen)
 				{
-					_windowRect = GUILayout.Window(WindowId, _windowRect, DrawWindow, "MULTIPLAYER", MenuLook.Window);
+					_windowRect = GUILayout.Window(WindowId, _windowRect, DrawWindow, "MULTIPLAYER", MenuLook.BigWindow);
+					// Bigger than it was: keep it on the screen.
+					_windowRect.y = Mathf.Max(0f, Mathf.Min(_windowRect.y, Screen.height - _windowRect.height));
 					Chat.AddBlocking(_windowRect);
 				}
 				else if (!MenuLook.HasButton)
@@ -349,7 +355,7 @@ namespace OstranautsMP
 
 		private void DrawWindow(int id)
 		{
-			GUISkin prev = MenuLook.Use();
+			GUISkin prev = MenuLook.Use(big: true);
 			try
 			{
 				DrawWindowContent(id);
@@ -456,11 +462,17 @@ namespace OstranautsMP
 			GUI.DragWindow();
 		}
 
-		// Your character: the avatar, the name, and the editor.
+		// Deleting the character: the name typed to confirm.
+		private static bool _deleting;
+
+		private static string _deleteTyped = "";
+
+		// Your character: the avatar, the name, the editor, and deleting it.
 		private static void DrawProfile()
 		{
 			GUILayout.BeginHorizontal();
-			Rect r = GUILayoutUtility.GetRect(64f, 64f, GUILayout.Width(64f), GUILayout.Height(64f));
+			float side = MenuLook.Big(64f);
+			Rect r = GUILayoutUtility.GetRect(side, side, GUILayout.Width(side), GUILayout.Height(side));
 			if (Profile.Avatar != null)
 			{
 				GUI.DrawTexture(r, Profile.Avatar, ScaleMode.ScaleToFit);
@@ -475,7 +487,37 @@ namespace OstranautsMP
 			{
 				Profile.OpenEditor();
 			}
+			// Only while not connected: the profile goes to the host with a claim.
+			if (Profile.HasLooks && Net.CurrentMode == NetSession.Mode.None && !_deleting && GUILayout.Button("Delete character"))
+			{
+				_deleting = true;
+				_deleteTyped = "";
+			}
 			GUILayout.EndVertical();
+			GUILayout.EndHorizontal();
+			if (!_deleting)
+			{
+				return;
+			}
+			if (!Profile.HasLooks || Net.CurrentMode != NetSession.Mode.None)
+			{
+				_deleting = false;
+				return;
+			}
+			GUILayout.Label("Type the name to delete: " + Profile.Current.Name);
+			_deleteTyped = GUILayout.TextField(_deleteTyped, 50);
+			GUILayout.BeginHorizontal();
+			GUI.enabled = _deleteTyped.Trim() == Profile.Current.Name;
+			if (GUILayout.Button("Delete"))
+			{
+				Profile.Delete();
+				_deleting = false;
+			}
+			GUI.enabled = true;
+			if (GUILayout.Button("Cancel"))
+			{
+				_deleting = false;
+			}
 			GUILayout.EndHorizontal();
 		}
 
@@ -503,7 +545,8 @@ namespace OstranautsMP
 			GUILayout.BeginHorizontal();
 			for (int i = 0; i < MarkPalette.Length; i++)
 			{
-				Rect r = GUILayoutUtility.GetRect(30f, 30f, GUILayout.Width(30f), GUILayout.Height(30f));
+				float side = MenuLook.Big(30f);
+				Rect r = GUILayoutUtility.GetRect(side, side, GUILayout.Width(side), GUILayout.Height(side));
 				bool selected = string.Equals(current, MarkPalette[i], StringComparison.OrdinalIgnoreCase);
 				if (selected)
 				{

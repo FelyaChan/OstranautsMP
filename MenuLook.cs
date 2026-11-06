@@ -15,7 +15,8 @@ namespace OstranautsMP
 	// own size and axes, so it stays there at any resolution. Pressed, it shows the "In" picture like the others.
 	//
 	// Windows: a GUISkin in the console's colours (dark panel, the teal of CREDITS / WIKI, green text fields) with
-	// the menu's own font, for the mod's IMGUI windows (Multiplayer, menu chat, crew picker).
+	// the menu's own font, for the mod's IMGUI windows (Multiplayer, menu chat, crew picker). The Multiplayer window and
+	// the character editor use a bigger version of it (Big).
 	public static class MenuLook
 	{
 		// Where the slot is, measured on the menu at 1920x1080: from OPTIONS' centre, in OPTIONS' widths / heights.
@@ -186,6 +187,11 @@ namespace OstranautsMP
 
 		private static GUISkin _skin;
 
+		private static GUISkin _big;
+
+		// The big skin's sizes against the normal one's.
+		internal const float BigScale = 1.35f;
+
 		private static readonly Color Teal = new Color32(43, 181, 211, 255);
 
 		private static readonly Color TealLight = new Color32(110, 216, 236, 255);
@@ -239,45 +245,62 @@ namespace OstranautsMP
 			return (t != null) ? t.font : null;
 		}
 
-		private static void BuildSkin()
+		// k: sizes against the normal skin (1, or BigScale).
+		private static GUISkin BuildSkin(float k)
 		{
-			_skin = UnityEngine.Object.Instantiate(GUI.skin);
-			_skin.hideFlags = HideFlags.HideAndDontSave;
+			GUISkin skin = UnityEngine.Object.Instantiate(GUI.skin);
+			skin.hideFlags = HideFlags.HideAndDontSave;
 			Font font = MenuFont();
 			if (font != null)
 			{
-				_skin.font = font;
+				skin.font = font;
 			}
 			Texture2D panel = Box(Panel, Teal, 2);
-			Set(_skin.window, panel, panel, panel, TealLight);
-			_skin.window.fontSize = 18;
-			_skin.window.fontStyle = FontStyle.Bold;
-			_skin.window.alignment = TextAnchor.UpperCenter;
-			_skin.window.padding = new RectOffset(14, 14, 32, 14);
+			Set(skin.window, panel, panel, panel, TealLight);
+			skin.window.fontSize = Px(18, k);
+			skin.window.fontStyle = FontStyle.Bold;
+			skin.window.alignment = TextAnchor.UpperCenter;
+			skin.window.padding = new RectOffset(Px(14, k), Px(14, k), Px(32, k), Px(14, k));
 			// The title is drawn inside the padding; this lifts it to the top edge.
-			_skin.window.contentOffset = new Vector2(0f, -24f);
-			_skin.box.normal.background = panel;
-			_skin.box.normal.textColor = Text;
-			_skin.label.normal.textColor = Text;
-			_skin.label.fontSize = 15;
-			_skin.label.wordWrap = true;
-			Set(_skin.button, Box(Teal, TealDark, 2), Box(TealLight, TealDark, 2), Box(TealDark, Ink, 2), Ink);
-			_skin.button.fontSize = 16;
-			_skin.button.fontStyle = FontStyle.Bold;
-			_skin.button.padding = new RectOffset(10, 10, 6, 6);
-			_skin.button.margin = new RectOffset(4, 4, 4, 4);
+			skin.window.contentOffset = new Vector2(0f, -Px(24, k));
+			skin.box.normal.background = panel;
+			skin.box.normal.textColor = Text;
+			skin.label.normal.textColor = Text;
+			skin.label.fontSize = Px(15, k);
+			skin.label.wordWrap = true;
+			Set(skin.button, Box(Teal, TealDark, 2), Box(TealLight, TealDark, 2), Box(TealDark, Ink, 2), Ink);
+			skin.button.fontSize = Px(16, k);
+			skin.button.fontStyle = FontStyle.Bold;
+			skin.button.padding = new RectOffset(Px(10, k), Px(10, k), Px(6, k), Px(6, k));
+			skin.button.margin = new RectOffset(Px(4, k), Px(4, k), Px(4, k), Px(4, k));
 			Texture2D field = Box(new Color32(4, 12, 14, 255), TealDark, 1);
 			Texture2D fieldOn = Box(new Color32(4, 12, 14, 255), Teal, 1);
-			Set(_skin.textField, field, fieldOn, fieldOn, Green);
-			_skin.textField.fontSize = 16;
-			_skin.textField.padding = new RectOffset(8, 8, 5, 5);
-			Set(_skin.textArea, field, fieldOn, fieldOn, Green);
-			_skin.settings.cursorColor = Green;
-			_skin.settings.selectionColor = new Color(0.17f, 0.71f, 0.83f, 0.45f);
+			Set(skin.textField, field, fieldOn, fieldOn, Green);
+			skin.textField.fontSize = Px(16, k);
+			skin.textField.padding = new RectOffset(Px(8, k), Px(8, k), Px(5, k), Px(5, k));
+			Set(skin.textArea, field, fieldOn, fieldOn, Green);
+			if (k != 1f)
+			{
+				skin.toggle.fontSize = Px(15, k);
+			}
+			skin.settings.cursorColor = Green;
+			skin.settings.selectionColor = new Color(0.17f, 0.71f, 0.83f, 0.45f);
 			Texture2D track = Box(new Color32(4, 12, 14, 255), new Color32(4, 12, 14, 255), 0);
-			_skin.verticalScrollbar.normal.background = track;
-			Set(_skin.verticalScrollbarThumb, Box(TealDark, TealDark, 0), Box(Teal, Teal, 0), Box(Teal, Teal, 0), Ink);
-			_skin.scrollView.normal.background = null;
+			skin.verticalScrollbar.normal.background = track;
+			Set(skin.verticalScrollbarThumb, Box(TealDark, TealDark, 0), Box(Teal, Teal, 0), Box(Teal, Teal, 0), Ink);
+			skin.scrollView.normal.background = null;
+			return skin;
+		}
+
+		private static int Px(int size, float k)
+		{
+			return Mathf.RoundToInt(size * k);
+		}
+
+		// A size in the big windows' layout (GUILayout.Width etc.).
+		internal static float Big(float size)
+		{
+			return size * BigScale;
 		}
 
 		// For the mod's IMGUI windows: GUILayout.Window(..., MenuLook.Window) and Use() at the top of the window function.
@@ -287,29 +310,50 @@ namespace OstranautsMP
 			{
 				if (_skin == null)
 				{
-					BuildSkin();
+					_skin = BuildSkin(1f);
 				}
 				return _skin.window;
 			}
 		}
 
-		// Switches to the skin and returns the one in use before, to give back to Restore.
-		internal static GUISkin Use()
+		// The same for the big windows (Multiplayer, character editor): BigWindow and Use(big: true).
+		internal static GUIStyle BigWindow
 		{
-			if (_skin == null)
+			get
 			{
-				BuildSkin();
+				if (_big == null)
+				{
+					_big = BuildSkin(BigScale);
+				}
+				return _big.window;
 			}
-			else if (_skin.font == null || _skin.font == GUI.skin.font)
+		}
+
+		// Switches to the skin and returns the one in use before, to give back to Restore.
+		internal static GUISkin Use(bool big = false)
+		{
+			if (big)
+			{
+				if (_big == null)
+				{
+					_big = BuildSkin(BigScale);
+				}
+			}
+			else if (_skin == null)
+			{
+				_skin = BuildSkin(1f);
+			}
+			GUISkin skin = big ? _big : _skin;
+			if (skin.font == null || skin.font == GUI.skin.font)
 			{
 				Font f = MenuFont();
 				if (f != null)
 				{
-					_skin.font = f;
+					skin.font = f;
 				}
 			}
 			GUISkin prev = GUI.skin;
-			GUI.skin = _skin;
+			GUI.skin = skin;
 			return prev;
 		}
 

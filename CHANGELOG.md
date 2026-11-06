@@ -3,6 +3,45 @@
 All notable changes to the Ostranauts Multiplayer Mod.
 Host and client must run the same version.
 
+## [0.33.1] - 2026-11-06
+
+### Fixed
+- Client: the claimed character (a new body too) couldn't be walked. After claiming, nothing was selected, so a click on the floor went to the host's character and was blocked. The character is now selected right after claiming and after every load, and with nothing selected, clicks go to them.
+
+## [0.33.0] - 2026-11-06
+
+### Changed
+- Main menu: bigger text, buttons and windows in the Multiplayer window and the character editor (Looks and Skills). The windows stay on the screen.
+
+## [0.32.0] - 2026-11-06
+
+### Added
+- **Delete character** in the Multiplayer window (main menu, while not connected). To confirm, type the character's name. The profile's looks, name, skills and avatar are deleted, and the profile gets a new ID: crew members the old character had in saves are no longer yours (others see them as another player's).
+
+## [0.31.1] - 2026-11-06
+
+### Changed
+- A new body starts with no money (the game used to give a new crew member a random amount). The host gives money and sets a salary in the BUDGET app.
+
+## [0.31.0] - 2026-11-06
+
+### Added
+- **New body:** in the **Choose your character** window the client can take a new body instead of a crew member. The host makes a new crew member next to a crew spawn point of their ship, with the profile's looks, name and skills, and the client plays them. Shown while the profile has nobody in this game; after that the client picks that character as before.
+  - The new body joins the host's crew without a contract: no signing bonus, salary or death pay. The host can set a salary in the BUDGET app.
+  - Skills: exactly the profile's (the game's random ones are taken away). Traits and starting things are the game's usual ones for a new crew member.
+- Character profile: up to 5 skills.
+
+### Fixed
+- People who appear on the host while the client is in the game (hired, brought by a story or an encounter, a new body) now appear on the client too. Before, the client didn't have them, and their things hung around as "missing".
+
+## [0.30.0] - 2026-11-06
+
+### Added
+- Character profile: a **Skills** tab in the editor (Create / Edit character in the Multiplayer window). It lists the game's skills; tick the ones your character should have. The choice is saved with the profile (`Skills` in `OstranautsMP_profile.json`).
+
+### Notes
+- The skills aren't applied in the game yet: picking a crew member works as before. They're for the new player body, which comes next.
+
 ## [0.29.0] - 2026-11-05
 
 ### Added

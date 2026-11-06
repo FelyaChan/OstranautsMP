@@ -16,7 +16,13 @@ namespace OstranautsMP
 	// name) and marks them as the profile's; a crew member another profile has is refused. The client applies the
 	// same change when the host confirms.
 	//
-	// Protocol: client -> host CLAIM <id>|<profile ID>|<base64 JSON Mirror.Look, or empty>;
+	// A new body: instead of a crew member, the client can have the host make a new one from its profile (looks, name,
+	// skills) and no money, straight into the host's crew at a crew spawn point of the host's ship. One per profile:
+	// while the profile has a crew member here, the client picks them. The host sends the new person over (PersonSync)
+	// and confirms as usual.
+	//
+	// Protocol: client -> host CLAIM <id>|<profile ID>|<base64 JSON Mirror.Look, or empty>
+	//                          NEWBODY <profile ID>|<base64 JSON Profile.Data>;
 	//           host -> client CLAIMED <id as picked>|<id now> or CLAIM_DENIED <reason>.
 	public static class CrewClaim
 	{
@@ -43,6 +49,7 @@ namespace OstranautsMP
 		{
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "SelectCO"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(SelectCOPrefix)));
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "GetSelectedCrew"), postfix: new HarmonyMethod(typeof(CrewClaim), nameof(GetSelectedCrewPostfix)));
+			harmony.Patch(AccessTools.Method(typeof(CrewSim), "GetBracketTarget"), postfix: new HarmonyMethod(typeof(CrewClaim), nameof(GetBracketTargetPostfix)));
 			harmony.Patch(AccessTools.Method(typeof(CondOwner), "AIIssueOrder"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(FreeWillPrefix)), finalizer: new HarmonyMethod(typeof(CrewClaim), nameof(FreeWillFinalizer)));
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "SetBracketTarget"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(SetBracketTargetPrefix)));
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "GetMouseOverCO"), postfix: new HarmonyMethod(typeof(CrewClaim), nameof(GetMouseOverCOPostfix)));
@@ -252,6 +259,16 @@ namespace OstranautsMP
 			return !(_inMouseHandler && _hidHost);
 		}
 
+		// Nothing selected: a click on the floor (CrewSim.Walk) orders the bracket target, else coPlayer (the host's
+		// character here, whose orders are blocked). Our character instead.
+		private static void GetBracketTargetPostfix(ref CondOwner __result)
+		{
+			if (__result == null && Locked)
+			{
+				__result = Mine;
+			}
+		}
+
 		private static void GetSelectedCrewPostfix(ref CondOwner __result)
 		{
 			if (Locked)
@@ -297,14 +314,8 @@ namespace OstranautsMP
 			{
 				return;
 			}
-			foreach (CondOwner s in CrewSim.aSelected)
-			{
-				if (s != null)
-				{
-					s.Selected = false;
-				}
-			}
-			CrewSim.aSelected.Clear();
+			// Selected, so clicks order them (and the others are unselected).
+			CrewSim.objInstance.SetBracketTarget(co.strID, bUpdateOnly: false);
 			CrewSim.objInstance.CamCenter(co);
 		}
 
@@ -371,9 +382,14 @@ namespace OstranautsMP
 				GUILayout.Label("No crew members besides the host's character.");
 			}
 			string me = (Profile.Current != null) ? Profile.Current.Id : null;
+			bool haveMine = false;
 			foreach (CondOwner co in crew)
 			{
 				string owner = Profile.OwnerOf(co);
+				if (owner != null && owner == me)
+				{
+					haveMine = true;
+				}
 				bool taken = owner != null && owner != me;
 				GUI.enabled = !taken;
 				if (GUILayout.Button(co.strName + (taken ? " (another player's)" : ((owner != null) ? " (yours)" : ""))))
@@ -385,6 +401,17 @@ namespace OstranautsMP
 					Plugin.Net.Send("CLAIM " + co.strID + "|" + (me ?? "") + "|" + ((look != null) ? Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonMapper.ToJson(look))) : ""));
 				}
 				GUI.enabled = true;
+			}
+			if (!haveMine && Profile.HasLooks && me != null)
+			{
+				GUILayout.Space(8f);
+				if (GUILayout.Button("New body: " + Profile.Current.Name))
+				{
+					_mine = null;
+					_claimLook = null;
+					_status = "Waiting for host...";
+					Plugin.Net.Send("NEWBODY " + me + "|" + Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonMapper.ToJson(Profile.Current))));
+				}
 			}
 			if (_status != null)
 			{
@@ -402,6 +429,12 @@ namespace OstranautsMP
 					if (Plugin.Net.CurrentMode == NetSession.Mode.Host)
 					{
 						HostClaim(arg);
+					}
+					return true;
+				case "NEWBODY":
+					if (Plugin.Net.CurrentMode == NetSession.Mode.Host)
+					{
+						HostNewBody(arg);
 					}
 					return true;
 				case "CLAIMED":
@@ -494,6 +527,120 @@ namespace OstranautsMP
 			Budget.MarkClientCharacter(co);
 			Plugin.Net.Send("CLAIMED " + id + "|" + co.strID);
 			Plugin.Log.LogInfo("Client plays as " + co.strName);
+		}
+
+		// Host: a new crew member made from the client's profile.
+		private static void HostNewBody(string arg)
+		{
+			int bar = arg.IndexOf('|');
+			string profileId = (bar > 0) ? arg.Substring(0, bar) : null;
+			Profile.Data data = null;
+			if (bar > 0)
+			{
+				try
+				{
+					data = JsonMapper.ToObject<Profile.Data>(Encoding.UTF8.GetString(Convert.FromBase64String(arg.Substring(bar + 1))));
+				}
+				catch (Exception e)
+				{
+					Plugin.Log.LogWarning("Bad profile with NEWBODY: " + e.Message);
+				}
+			}
+			CondOwner player = CrewSim.coPlayer;
+			if (!WorldSync.InGame || player == null || player.Company == null || CrewSim.objInstance == null)
+			{
+				Plugin.Net.Send("CLAIM_DENIED the host isn't in the game");
+				return;
+			}
+			if (string.IsNullOrEmpty(profileId) || data == null || data.Face == null || data.Face.Length == 0)
+			{
+				Plugin.Net.Send("CLAIM_DENIED no character in the profile");
+				return;
+			}
+			if (Apart.HostActive)
+			{
+				Plugin.Net.Send("CLAIM_DENIED the host is away from your place");
+				return;
+			}
+			foreach (CondOwner other in DataHandler.mapCOs.Values)
+			{
+				if (other != null && !other.bDestroyed && Profile.OwnerOf(other) == profileId)
+				{
+					Plugin.Net.Send("CLAIM_DENIED you already have " + other.strName + " here");
+					return;
+				}
+			}
+			// The game's own new crew member (the console's makecrew): a random person at a crew spawn tile of the
+			// host's ship, with their own random skills, traits and things.
+			CondOwner co = CrewSim.objInstance.GetRandomCrew();
+			if (co == null)
+			{
+				Plugin.Net.Send("CLAIM_DENIED the host couldn't make a new body");
+				return;
+			}
+			JoinCrew(co, player);
+			SetSkills(co, data.Skills);
+			// Starts with an empty wallet (the game gave them random money); the host gives money and sets a salary in
+			// the BUDGET app.
+			co.ZeroCondAmount(Ledger.CURRENCY);
+			Profile.SetOwner(co, profileId);
+			Mirror.Look look = new Mirror.Look();
+			look.NewId = data.Name;
+			look.Face = data.Face;
+			look.Body = data.Body;
+			look.Skin = data.Skin;
+			look.Gender = data.Gender;
+			look.Attract = data.Attract;
+			Mirror.Apply(co, look);
+			_claimed = co.strID;
+			Budget.MarkClientCharacter(co);
+			PersonSync.HostSend(co);
+			Plugin.Net.Send("CLAIMED " + co.strID + "|" + co.strID);
+			Plugin.Log.LogInfo("New body for the client: " + co.strName);
+		}
+
+		// Into the host's company like a hire (Hire.UpdateThem), without the contract: no signing bonus, salary or
+		// death pay in the books. Salary is the host's to set in the BUDGET app.
+		private static void JoinCrew(CondOwner co, CondOwner player)
+		{
+			JsonCompany company = player.Company;
+			JsonCompanyRules rules = new JsonCompanyRules();
+			rules.StartWorkdayAt(StarSystem.nUTCHour);
+			company.mapRoster[co.strID] = rules;
+			co.AddCondAmount("IsPlayerCrew", 1.0);
+			co.Company = company;
+			co.SetShipsOwned(player.GetShipsOwned());
+		}
+
+		// The profile's skills instead of the random ones: every skill the profile can pick (as in its editor) is
+		// taken away, then the picked ones (up to Profile.MaxSkills) are given.
+		private static void SetSkills(CondOwner co, string[] skills)
+		{
+			foreach (KeyValuePair<string, JsonCond> kv in DataHandler.dictConds)
+			{
+				if (kv.Value != null && kv.Key.StartsWith("Skill", StringComparison.Ordinal) && kv.Value.nDisplaySelf == 2 && co.HasCond(kv.Key))
+				{
+					co.ZeroCondAmount(kv.Key);
+				}
+			}
+			if (skills == null)
+			{
+				return;
+			}
+			int n = 0;
+			foreach (string skill in skills)
+			{
+				if (n >= Profile.MaxSkills)
+				{
+					break;
+				}
+				JsonCond jc;
+				if (skill != null && DataHandler.dictConds.TryGetValue(skill, out jc) && jc != null && skill.StartsWith("Skill", StringComparison.Ordinal) && jc.nDisplaySelf == 2)
+				{
+					co.SetCondAmount(skill, 1.0);
+					n++;
+				}
+			}
 		}
 	}
 }

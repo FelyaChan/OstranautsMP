@@ -11,7 +11,8 @@ using UnityEngine;
 namespace OstranautsMP
 {
 	// Your character profile, made in the main menu (Multiplayer window -> Character): face, skin, body type,
-	// pronouns, attraction and name, saved on this computer. When you join and pick a crew member, they become this
+	// pronouns, attraction, name and skills, saved on this computer. The skills go to a new body made from the profile
+	// (CrewClaim); a crew member picked with the profile keeps their own. When you join and pick a crew member, they become this
 	// character (Mirror.Apply: the same rename and looks as the mirror); their skills, traits and items stay theirs.
 	//
 	// The crew member then belongs to your profile (GUI property map MPProfile on the person, saved with the game):
@@ -38,9 +39,14 @@ namespace OstranautsMP
 			public string Gender;
 
 			public string[] Attract;
+
+			// Skill conditions (Skill*) picked in the editor, up to MaxSkills. A new body gets these (CrewClaim).
+			public string[] Skills;
 		}
 
 		internal const string Gpm = "MPProfile";
+
+		internal const int MaxSkills = 5;
 
 		private const string Skins = "ABC";
 
@@ -74,7 +80,16 @@ namespace OstranautsMP
 
 		private static string _error;
 
-		private static Rect _rect = new Rect(0f, 0f, 560f, 10f);
+		private static Rect _rect = new Rect(0f, 0f, MenuLook.Big(560f), 10f);
+
+		private static readonly string[] Tabs = { "Looks", "Skills" };
+
+		private static int _tab;
+
+		// The game's skills (conditions Skill* shown to the player), by friendly name.
+		private static List<KeyValuePair<string, string>> _skillList;
+
+		private static Vector2 _skillScroll;
 
 		private static string FilePath => Path.Combine(Paths.ConfigPath, "OstranautsMP_profile.json");
 
@@ -138,6 +153,37 @@ namespace OstranautsMP
 			{
 				Plugin.Log.LogError("Profile: could not save " + FilePath + ": " + e.Message);
 			}
+		}
+
+		// The character is gone: looks, name, skills and the avatar. The profile gets a new ID, so crew members the old
+		// character had in saves are no longer this profile's.
+		internal static void Delete()
+		{
+			if (_open)
+			{
+				CloseEditor();
+			}
+			string old = (Current != null) ? Current.Name : null;
+			Current = new Data();
+			Current.Id = Guid.NewGuid().ToString("N");
+			Write();
+			try
+			{
+				if (File.Exists(AvatarPath))
+				{
+					File.Delete(AvatarPath);
+				}
+			}
+			catch (Exception e)
+			{
+				Plugin.Log.LogWarning("Profile: could not delete the avatar: " + e.Message);
+			}
+			if (_avatar != null)
+			{
+				UnityEngine.Object.Destroy(_avatar);
+				_avatar = null;
+			}
+			Plugin.Log.LogInfo("Profile: deleted " + old);
 		}
 
 		// ---- In the game ---------------------------------------------------------------------------------------
@@ -298,6 +344,7 @@ namespace OstranautsMP
 			_edit.Name = Current.Name;
 			_edit.Gender = Current.Gender ?? "IsMale";
 			_edit.Attract = (Current.Attract != null) ? (string[])Current.Attract.Clone() : new string[0];
+			_edit.Skills = (Current.Skills != null) ? (string[])Current.Skills.Clone() : new string[0];
 			_edit.Body = Current.Body;
 			_edit.Face = (Current.Face != null && Current.Face.Length > 0) ? (string[])Current.Face.Clone() : FaceAnim2.GetRandomFace(_edit.Gender != "IsFemale", _edit.Gender != "IsMale");
 			_edit.Skin = Current.Skin ?? FaceAnim2.GetFaceGroups(_edit.Face)[0];
@@ -311,8 +358,12 @@ namespace OstranautsMP
 				_edit.Name = RandomName(_edit.Gender);
 			}
 			BuildParts();
+			BuildSkills();
 			Redraw();
 			_error = null;
+			_tab = 0;
+			_skillScroll = Vector2.zero;
+			_rect.height = 10f;
 			_open = true;
 			_rect.x = (Screen.width - _rect.width) / 2f;
 			_rect.y = Screen.height / 6f;
@@ -354,6 +405,20 @@ namespace OstranautsMP
 					_parts[n].Add(item);
 				}
 			}
+		}
+
+		private static void BuildSkills()
+		{
+			_skillList = new List<KeyValuePair<string, string>>();
+			foreach (KeyValuePair<string, JsonCond> kv in DataHandler.dictConds)
+			{
+				JsonCond jc = kv.Value;
+				if (jc != null && kv.Key.StartsWith("Skill", StringComparison.Ordinal) && jc.nDisplaySelf == 2)
+				{
+					_skillList.Add(new KeyValuePair<string, string>(kv.Key, string.IsNullOrEmpty(jc.strNameFriendly) ? kv.Key : jc.strNameFriendly));
+				}
+			}
+			_skillList.Sort((a, b) => string.Compare(a.Value, b.Value, StringComparison.OrdinalIgnoreCase));
 		}
 
 		private static void Redraw()
@@ -471,13 +536,14 @@ namespace OstranautsMP
 			{
 				return;
 			}
-			_rect = GUILayout.Window(WindowId, _rect, DrawEditor, "CHARACTER", MenuLook.Window);
+			_rect = GUILayout.Window(WindowId, _rect, DrawEditor, "CHARACTER", MenuLook.BigWindow);
+			_rect.y = Mathf.Max(0f, Mathf.Min(_rect.y, Screen.height - _rect.height));
 			Chat.AddBlocking(_rect);
 		}
 
 		private static void DrawEditor(int id)
 		{
-			GUISkin prev = MenuLook.Use();
+			GUISkin prev = MenuLook.Use(big: true);
 			try
 			{
 				DrawEditorContent();
@@ -496,9 +562,71 @@ namespace OstranautsMP
 
 		private static void DrawEditorContent()
 		{
+			int tab = GUILayout.Toolbar(_tab, Tabs);
+			if (tab != _tab)
+			{
+				_tab = tab;
+				// Let the window fit the other tab.
+				_rect.height = 10f;
+			}
+			GUILayout.Space(8f);
+			if (_tab == 1)
+			{
+				DrawSkills();
+			}
+			else
+			{
+				DrawLooks();
+			}
+			if (_error != null)
+			{
+				GUILayout.Label(_error);
+			}
 			GUILayout.BeginHorizontal();
-			GUILayout.BeginVertical(GUILayout.Width(200f));
-			Rect r = GUILayoutUtility.GetRect(192f, 192f, GUILayout.Width(192f), GUILayout.Height(192f));
+			if (GUILayout.Button("Save"))
+			{
+				Save();
+			}
+			if (GUILayout.Button("Cancel"))
+			{
+				CloseEditor();
+			}
+			GUILayout.EndHorizontal();
+		}
+
+		private static void DrawSkills()
+		{
+			List<string> chosen = new List<string>(_edit.Skills ?? new string[0]);
+			GUILayout.Label("Chosen: " + chosen.Count + " / " + MaxSkills);
+			_skillScroll = GUILayout.BeginScrollView(_skillScroll, GUILayout.Height(MenuLook.Big(420f)));
+			if (_skillList != null)
+			{
+				foreach (KeyValuePair<string, string> skill in _skillList)
+				{
+					bool on = chosen.Contains(skill.Key);
+					GUI.enabled = on || chosen.Count < MaxSkills;
+					bool now = GUILayout.Toggle(on, " " + skill.Value);
+					GUI.enabled = true;
+					if (now && !on)
+					{
+						chosen.Add(skill.Key);
+					}
+					else if (!now && on)
+					{
+						chosen.Remove(skill.Key);
+					}
+				}
+			}
+			GUILayout.EndScrollView();
+			_edit.Skills = chosen.ToArray();
+		}
+
+		private static void DrawLooks()
+		{
+			GUILayout.BeginHorizontal();
+			GUILayout.BeginVertical(GUILayout.Width(MenuLook.Big(200f)));
+			float side = MenuLook.Big(192f);
+			Rect r = GUILayoutUtility.GetRect(side, side, GUILayout.Width(side), GUILayout.Height(side));
 			if (_preview != null)
 			{
 				GUI.DrawTexture(r, _preview, ScaleMode.ScaleToFit);
@@ -511,7 +639,7 @@ namespace OstranautsMP
 			GUILayout.Label("Name");
 			GUILayout.BeginHorizontal();
 			_edit.Name = GUILayout.TextField(_edit.Name ?? "", 50);
-			if (GUILayout.Button("?", GUILayout.Width(28f)))
+			if (GUILayout.Button("?", GUILayout.Width(MenuLook.Big(28f))))
 			{
 				_edit.Name = RandomName(_edit.Gender);
 			}
@@ -566,20 +694,6 @@ namespace OstranautsMP
 			GUILayout.Label("(the body is seen in the game)");
 			GUILayout.EndVertical();
 			GUILayout.EndHorizontal();
-			if (_error != null)
-			{
-				GUILayout.Label(_error);
-			}
-			GUILayout.BeginHorizontal();
-			if (GUILayout.Button("Save"))
-			{
-				Save();
-			}
-			if (GUILayout.Button("Cancel"))
-			{
-				CloseEditor();
-			}
-			GUILayout.EndHorizontal();
 		}
 
 		private static void NextBody(int dir)
@@ -603,13 +717,13 @@ namespace OstranautsMP
 		private static void Row(string label, string value, Action back, Action next)
 		{
 			GUILayout.BeginHorizontal();
-			GUILayout.Label(label, GUILayout.Width(80f));
-			if (GUILayout.Button("<", GUILayout.Width(32f)))
+			GUILayout.Label(label, GUILayout.Width(MenuLook.Big(80f)));
+			if (GUILayout.Button("<", GUILayout.Width(MenuLook.Big(32f))))
 			{
 				back();
 			}
-			GUILayout.Label(value, GUILayout.Width(60f));
-			if (GUILayout.Button(">", GUILayout.Width(32f)))
+			GUILayout.Label(value, GUILayout.Width(MenuLook.Big(60f)));
+			if (GUILayout.Button(">", GUILayout.Width(MenuLook.Big(32f))))
 			{
 				next();
 			}

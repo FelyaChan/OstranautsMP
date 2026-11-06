@@ -409,6 +409,11 @@ namespace OstranautsMP
 							Dirty[co.strID] = co;
 							Fresh.Add(co.strID);
 						}
+						else if (co != null && !co.bDestroyed && co.Crew != null)
+						{
+							// A person their items belong to (PersonSync).
+							PersonSync.HostSend(co);
+						}
 						break;
 					}
 					case "CHECK":
