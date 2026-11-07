@@ -38,6 +38,12 @@ namespace OstranautsMP
 		// How long a bubble stays after it's fully typed.
 		private const float BubbleSeconds = 5f;
 
+		// Bubbles one speaker can have at once (older ones above the newest).
+		private const int MaxBubbles = 3;
+
+		// Where each bubble is drawn above its speaker (pixels up), easing towards its place in the stack.
+		private static readonly Dictionary<string, float> BubbleLift = new Dictionary<string, float>();
+
 		private const float TypeCharsPerSecond = 30f;
 
 		private const float MarkSeconds = 8f;
@@ -179,6 +185,7 @@ namespace OstranautsMP
 			PeerName = null;
 			Plugin.Net.Send("NAME " + Plugin.PlayerName);
 			PdaLog.SendAvatar();
+			PdaProfile.SendBio();
 		}
 
 		public static void OnPeerLost(string reason)
@@ -556,7 +563,15 @@ namespace OstranautsMP
 			{
 				return;
 			}
-			Bubbles.RemoveAll((Bubble b) => b.CharacterId == characterId);
+			// Up to MaxBubbles per speaker: the new one at the bottom, the older ones pushed up, each on its own timer.
+			int mine = 0;
+			for (int i = Bubbles.Count - 1; i >= 0; i--)
+			{
+				if (Bubbles[i].CharacterId == characterId && ++mine >= MaxBubbles)
+				{
+					Bubbles.RemoveAt(i);
+				}
+			}
 			Bubble nb;
 			nb.CharacterId = characterId;
 			nb.Name = name;
@@ -654,10 +669,22 @@ namespace OstranautsMP
 			app.strIcon = "pda_apps/IcoPDANotes";
 			app.bHidden = false;
 			DataHandler.dictPDAAppIcons[AppName] = app;
+			PdaProfile.Register();
 		}
 
 		private static bool OpenAppPrefix(string appName)
 		{
+			if (appName == PdaProfile.AppName)
+			{
+				PdaChat.Close();
+				GUIPDA ppda = GUIPDA.instance;
+				if (ppda != null && !PdaProfile.Toggle(ppda))
+				{
+					Plugin.Log.LogWarning("PDA profile could not be opened");
+				}
+				return false;
+			}
+			PdaProfile.Close();
 			if (appName != AppName)
 			{
 				PdaChat.Close();
@@ -847,8 +874,11 @@ namespace OstranautsMP
 				if (GUI.GetNameOfFocusedControl() != QuickControl)
 				{
 					GUI.FocusControl(QuickControl);
+					// A field that gets the focus selects all its text, and the next key typed would replace it
+					// (the first letter lost): the caret goes to the end instead, as soon as the focus is there.
+					_quickCaretToEnd = true;
 				}
-				if (_quickCaretToEnd && e.type == EventType.Repaint)
+				else if (_quickCaretToEnd)
 				{
 					TextEditor te = GUIUtility.GetStateObject(typeof(TextEditor), GUIUtility.keyboardControl) as TextEditor;
 					if (te != null)
@@ -990,8 +1020,12 @@ namespace OstranautsMP
 			{
 				return;
 			}
-			foreach (Bubble b in Bubbles)
+			// Newest first, so each speaker's stack is built from the bottom up.
+			Dictionary<string, float> stackTop = new Dictionary<string, float>();
+			HashSet<string> alive = new HashSet<string>();
+			for (int bi = Bubbles.Count - 1; bi >= 0; bi--)
 			{
+				Bubble b = Bubbles[bi];
 				CondOwner co;
 				if (!DataHandler.mapCOs.TryGetValue(b.CharacterId, out co) || co == null || co.bDestroyed || co.tf == null)
 				{
@@ -1007,6 +1041,19 @@ namespace OstranautsMP
 				float w = Mathf.Min(380f, _speechStyle.CalcSize(full).x + 4f);
 				float h = _speechStyle.CalcHeight(full, w);
 				Rect r = onScreen ? new Rect(target.x - w / 2f, target.y - h - 6f, w, h) : EdgeRect(target, w, h, Color.white);
+				// Its place in the speaker's stack: above the newer ones; it slides up there.
+				float below;
+				stackTop.TryGetValue(b.CharacterId, out below);
+				stackTop[b.CharacterId] = below + h + 4f;
+				string key = b.CharacterId + "|" + b.Start.ToString("R", Inv);
+				alive.Add(key);
+				float lift;
+				lift = BubbleLift.TryGetValue(key, out lift) ? Mathf.Lerp(lift, below, Mathf.Clamp01(Time.unscaledDeltaTime * 10f)) : below;
+				BubbleLift[key] = lift;
+				r.y -= lift;
+				// The older ones fade over their last half second.
+				Color keepColor = GUI.color;
+				GUI.color = new Color(keepColor.r, keepColor.g, keepColor.b, keepColor.a * Mathf.Clamp01((b.Until - Time.unscaledTime) * 2f));
 				// Typewriter: the first n characters of "Name: text".
 				int n = Mathf.FloorToInt((Time.unscaledTime - b.Start) * TypeCharsPerSecond);
 				string shown;
@@ -1025,6 +1072,22 @@ namespace OstranautsMP
 					shown = "<i>" + shown + "</i>";
 				}
 				GUI.Box(r, shown, _speechStyle);
+				GUI.color = keepColor;
+			}
+			if (Event.current.type == EventType.Repaint)
+			{
+				List<string> gone = new List<string>();
+				foreach (string key in BubbleLift.Keys)
+				{
+					if (!alive.Contains(key))
+					{
+						gone.Add(key);
+					}
+				}
+				foreach (string key in gone)
+				{
+					BubbleLift.Remove(key);
+				}
 			}
 		}
 
@@ -1283,18 +1346,20 @@ namespace OstranautsMP
 		{
 			EnsurePdaApp();
 			PdaChat.Update();
+			PdaProfile.Update();
 			if (CrewSim.objInstance == null)
 			{
 				_weSetTyping = false;
 				return;
 			}
 			// While our IMGUI text field has focus the game's hotkeys (WASD, pause...) stay quiet.
-			if (_focused && !CrewSim.Typing)
+			bool typing = _focused || PdaProfile.Editing;
+			if (typing && !CrewSim.Typing)
 			{
 				CrewSim.Typing = true;
 				_weSetTyping = true;
 			}
-			else if (!_focused && _weSetTyping)
+			else if (!typing && _weSetTyping)
 			{
 				CrewSim.Typing = false;
 				_weSetTyping = false;

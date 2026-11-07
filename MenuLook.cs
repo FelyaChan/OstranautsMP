@@ -206,6 +206,15 @@ namespace OstranautsMP
 
 		private static readonly Color Green = new Color32(140, 255, 150, 255);
 
+		private static Texture2D _checkOff;
+
+		private static Texture2D _checkOn;
+
+		// A check box drawn as a plain square (it stretches to any size, unlike the skin's toggle): off and on.
+		internal static Texture2D CheckOff => _checkOff ?? (_checkOff = Box(new Color32(4, 12, 14, 255), Teal, 2));
+
+		internal static Texture2D CheckOn => _checkOn ?? (_checkOn = Box(Teal, TealLight, 2));
+
 		private static Texture2D Box(Color fill, Color edge, int border)
 		{
 			const int n = 16;

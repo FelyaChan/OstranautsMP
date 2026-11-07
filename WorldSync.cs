@@ -54,6 +54,9 @@ namespace OstranautsMP
 			// Animator "AnimState" value on the host; -1 if the host has no animator for this character.
 			public int Anim;
 
+			// The ship they're on at the host (null from an older host).
+			public string Ship;
+
 			public float Time;
 		}
 
@@ -89,6 +92,8 @@ namespace OstranautsMP
 		{
 			HarmonyMethod block = new HarmonyMethod(typeof(WorldSync), nameof(BlockOnClientPrefix));
 			harmony.Patch(AccessTools.PropertySetter(typeof(CrewSim), "Paused"), prefix: new HarmonyMethod(typeof(WorldSync), nameof(PausedPrefix)));
+			harmony.Patch(AccessTools.Method(typeof(GUIData), "Init"), prefix: new HarmonyMethod(typeof(WorldSync), nameof(GuiInitPrefix)), finalizer: new HarmonyMethod(typeof(WorldSync), nameof(GuiInitFinalizer)));
+			harmony.Patch(AccessTools.Method(typeof(GUIData), "SaveAndClose"), prefix: new HarmonyMethod(typeof(WorldSync), nameof(GuiInitPrefix)), finalizer: new HarmonyMethod(typeof(WorldSync), nameof(GuiInitFinalizer)));
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "TimeScaleMult"), prefix: block);
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "ResetTimeScale"), prefix: block);
 			harmony.Patch(AccessTools.Method(typeof(CondOwner), "SetAnimState"), prefix: new HarmonyMethod(typeof(WorldSync), nameof(SetAnimStatePrefix)));
@@ -123,9 +128,31 @@ namespace OstranautsMP
 			return false;
 		}
 
-		// Pause: the client's rule below, and the host can't unpause while the client loads (ClientLoad).
+		// A game window (shop, jobs, finance...) opening or closing: some pause the game while open and set back on
+		// closing the pause they found on opening (GUIData.bPausesGame).
+		private static bool _guiOpening;
+
+		private static void GuiInitPrefix()
+		{
+			_guiOpening = true;
+		}
+
+		// A finalizer: runs even when Init throws, so the flag never sticks.
+		private static Exception GuiInitFinalizer(Exception __exception)
+		{
+			_guiOpening = false;
+			return __exception;
+		}
+
+		// Pause: the client's rule below, the host can't unpause while the client loads (ClientLoad), and in
+		// multiplayer a game window doesn't pause the game for everyone (closing it then sets the pause it found).
 		private static bool PausedPrefix(bool value)
 		{
+			// Neither: closing would undo a pause the other player set meanwhile.
+			if (_guiOpening && Plugin.Net.Connected)
+			{
+				return false;
+			}
 			return BlockOnClientPrefix() && !ClientLoad.BlocksUnpause(value);
 		}
 
@@ -204,6 +231,7 @@ namespace OstranautsMP
 				{
 					continue;
 				}
+				FollowShip(co, item.Value);
 				// Keep the footprints where the Pathfinder put them this frame.
 				GameObject marker = (co.Pathfinder != null) ? (PathMarker.GetValue(co.Pathfinder) as GameObject) : null;
 				bool hasMarker = marker != null && marker.activeSelf;
@@ -329,7 +357,8 @@ namespace OstranautsMP
 					Sb.Append(p.x.ToString("0.###", Inv)).Append(',');
 					Sb.Append(p.y.ToString("0.###", Inv)).Append(',');
 					Sb.Append(co.tf.rotation.eulerAngles.z.ToString("0.#", Inv)).Append(',');
-					Sb.Append(co.GetAnimState().ToString(Inv));
+					Sb.Append(co.GetAnimState().ToString(Inv)).Append(',');
+					Sb.Append(ship.strRegID);
 				}
 			}
 			if (Sb.Length > 0)
@@ -371,6 +400,62 @@ namespace OstranautsMP
 			}
 		}
 
+		// Client: a person who walked onto another (docked) ship at the host is moved onto it here too. Positions alone
+		// don't do that: they'd stay a person of the old ship, which this client then doesn't show.
+		private const float MineShipDelay = 3f;
+
+		private static float _mineShipSince = -1f;
+
+		private static string _mineShipWanted;
+
+		private static void FollowShip(CondOwner co, Target t)
+		{
+			if (t.Ship == null || co.ship == null || co.ship.strRegID == t.Ship || CrewSim.system == null)
+			{
+				if (co == CrewClaim.ClientMine)
+				{
+					_mineShipSince = -1f;
+				}
+				return;
+			}
+			// The client's own character crosses ships by itself while walking (prediction); only a mismatch that
+			// lasts is corrected, so a step ahead of the host isn't pulled back.
+			if (co == CrewClaim.ClientMine)
+			{
+				float now = Time.unscaledTime;
+				if (_mineShipSince < 0f || _mineShipWanted != t.Ship)
+				{
+					_mineShipSince = now;
+					_mineShipWanted = t.Ship;
+					return;
+				}
+				if (now - _mineShipSince < MineShipDelay)
+				{
+					return;
+				}
+				_mineShipSince = -1f;
+			}
+			Ship to = CrewSim.system.GetShipByRegID(t.Ship);
+			if (to == null || to.bDestroyed || to.LoadState < Ship.Loaded.Full)
+			{
+				return;
+			}
+			try
+			{
+				Vector3 p = co.tf.position;
+				co.RemoveFromCurrentHome(bForce: true);
+				co.tf.position = new Vector3(t.Pos.x, t.Pos.y, p.z);
+				to.AddCO(co, bTiles: true);
+				Tile tile = to.GetTileAtWorldCoords1(t.Pos.x, t.Pos.y, bAllowDocked: false);
+				co.currentRoom = (tile != null) ? tile.room : null;
+				Plugin.Log.LogInfo("Moved " + co.strName + " onto " + t.Ship + " (as on the host)");
+			}
+			catch (Exception e)
+			{
+				Plugin.Log.LogWarning("Moving " + co.strName + " onto " + t.Ship + " failed: " + e.Message);
+			}
+		}
+
 		private static void ParsePositions(string arg, float now)
 		{
 			foreach (string entry in arg.Split(';'))
@@ -380,12 +465,13 @@ namespace OstranautsMP
 				float y;
 				float r;
 				int a;
-				if (f.Length == 5 && float.TryParse(f[1], NumberStyles.Float, Inv, out x) && float.TryParse(f[2], NumberStyles.Float, Inv, out y) && float.TryParse(f[3], NumberStyles.Float, Inv, out r) && int.TryParse(f[4], NumberStyles.Integer, Inv, out a))
+				if ((f.Length == 5 || f.Length == 6) && float.TryParse(f[1], NumberStyles.Float, Inv, out x) && float.TryParse(f[2], NumberStyles.Float, Inv, out y) && float.TryParse(f[3], NumberStyles.Float, Inv, out r) && int.TryParse(f[4], NumberStyles.Integer, Inv, out a))
 				{
 					Target t;
 					t.Pos = new Vector2(x, y);
 					t.Rot = r;
 					t.Anim = a;
+					t.Ship = (f.Length == 6) ? f[5] : null;
 					t.Time = now;
 					Targets[f[0]] = t;
 				}

@@ -49,6 +49,9 @@ namespace OstranautsMP
 
 		internal static int Version;
 
+		// The other player's profile ID, from their avatar.
+		internal static string PeerProfileId;
+
 		private static List<Entry> _entries;
 
 		private static readonly Dictionary<string, Texture2D> Avatars = new Dictionary<string, Texture2D>();
@@ -254,6 +257,7 @@ namespace OstranautsMP
 				return;
 			}
 			string id = Encoding.ASCII.GetString(data, 0, IdLength);
+			PeerProfileId = id;
 			foreach (char ch in id)
 			{
 				// A file name: only the hex of a Guid.

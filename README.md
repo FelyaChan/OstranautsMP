@@ -48,7 +48,7 @@ Not been tested on more recent builds.
 * Falls back to resending the save if a location change can't be synced otherwise.
 
 ### Communication
-* Speech on Enter (bubbles over characters), and PDA messages in a **CHAT** app on the PDA (sender's avatar and colour, in-game time, delete one or all; kept with your profile across games); a chat window in the main menu.
+* Speech on Enter (bubbles over characters; up to three per speaker, older ones float up and fade), and PDA messages in a **CHAT** app on the PDA (sender's avatar and colour, in-game time, delete one or all; kept with your profile across games); a chat window in the main menu.
 * Speech bubbles over characters, typed out typewriter-style with the speaker's name; off-screen bubbles point to the speaker.
 * Player names are coloured by how the character is doing (green → red).
 * **Ping** with the `~` key: marks a spot or an item under the cursor with its name; on a person it rings them and follows them. Visible to both, with an edge arrow when off-screen. Each player picks their ping colour.
@@ -61,7 +61,7 @@ Not been tested on more recent builds.
 * The client's character can't quit the crew.
 
 ### Your character
-* **Profile:** make your character in the main menu (**Create character** in the Multiplayer window): face, skin, body type, pronouns, name, and up to 5 skills on the **Skills** tab; the portrait becomes your avatar (also in the PDA chat). Your PDA messages are kept with the profile too, across games and sessions. When you join, either take a **New body** (the host makes a new crew member from your profile: looks, name and skills; no money to start with, the host gives money and salary in the BUDGET app) or pick a crew member, who becomes that character (their skills and items stay). A crew member is then yours: other players can't pick them. Changes you make at a mirror in the game are saved back to your profile. **Delete character** in the Multiplayer window removes it (type its name to confirm); crew members it had in saves stop being yours. *(experimental)*
+* **Profile:** make your character in the main menu (**Create character** in the Multiplayer window): face, skin, body type, pronouns, name, and up to 5 skills on the **Skills** tab; the portrait becomes your avatar (also in the PDA chat). Your PDA messages are kept with the profile too, across games and sessions. When you join, either take a **New body** (the host makes a new crew member from your profile: looks, name and skills; no money to start with, the host gives money and salary in the BUDGET app) or pick a crew member, who becomes that character (their skills and items stay). A crew member is then yours: other players can't pick them. Changes you make at a mirror in the game are saved back to your profile. A **PROFILE** app on the PDA shows your portrait, skills, training progress and a biography you write there (kept with the profile); switch to the other player to see theirs. **Delete character** in the Multiplayer window removes it (type its name to confirm); crew members it had in saves stop being yours. *(experimental)*
 * **Mirror:** at any sink, **View Mirror** lets you change your own character's whole look (face, skin, body) and name. The other player sees the change. Each player can only edit their own character. Renaming keeps skills, items, salary and crew membership. *(experimental)*
 * **Lockers:** **Make it mine** on an installed container (locker, cabinet, fridge) adds your character's name to it; **Give it up** removes it. It's a label only, nobody is locked out.
 
@@ -96,7 +96,7 @@ If the client joins while you're already in the game, the game pauses and sends 
 3. Enter the Host's IP address and port (`7777`), then click **Join**.
 4. The window stays open while you wait: the host's save is downloaded and loaded automatically.
    While the client loads, the host's game stays paused, with a progress panel at the top; it can be unpaused once the client is in.
-5. In the game, a **Choose your character** window appears: take **New body** (a new crew member made from your profile, with its looks, name and skills; shown while your profile has nobody in this game) or pick a crew member. If you made a character profile, a picked crew member takes its looks and name. Your character is selected right away, so clicks give them orders. This character becomes yours permanently: nobody else can pick them, and they can't quit the crew.
+5. In the game, a **Choose your character** window appears: take **New body** (a new crew member made from your profile, with its looks, name and skills; shown while your profile has nobody in this game; if your character is somewhere the host isn't, the host tells you where) or pick a crew member. If you made a character profile, a picked crew member takes its looks and name. Your character is selected right away, so clicks give them orders. This character becomes yours permanently: nobody else can pick them, and they can't quit the crew. If they die, you keep watching and get a **Your character died** window: when the host's ship is in port, take a new body there (a new name, the profile's looks and skills, 80% of the last body's training).
 
 Make your character before joining: **Create character** in the Multiplayer window.
 

@@ -103,6 +103,11 @@ namespace OstranautsMP
 		// Client bound to a character: actions of other people aren't run, not even locally.
 		private static bool BlockedOnClient(CondOwner us)
 		{
+			if (Death.ClientDead)
+			{
+				// Dead: only watching.
+				return us != null && us.HasCond("IsHuman");
+			}
 			CondOwner mine = CrewClaim.ClientMine;
 			return mine != null && us != null && us != mine && us.HasCond("IsHuman");
 		}

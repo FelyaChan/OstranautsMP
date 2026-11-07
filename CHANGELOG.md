@@ -3,6 +3,76 @@
 All notable changes to the Ostranauts Multiplayer Mod.
 Host and client must run the same version.
 
+## [0.35.1] - 2026-11-07
+
+### Fixed
+- Client: the work rate over a working person always read x0.0 (the client counted it itself and missed the tools in use). The host now sends its own label ("repair x1.4") with the progress bar.
+- Closing a shop (or another game window that used to pause) no longer sets the pause back to what it was when the window opened, which could undo a pause the other player set meanwhile.
+- PROFILE app: switching tabs or Edit / Save / Cancel no longer changes the layout in the middle of a frame (Unity's "Getting control … position" error, the page flickering).
+
+## [0.35.0] - 2026-11-07
+
+### Added
+- **PROFILE** app on the PDA: portrait, name, skills, training progress bars and a **Biography**. Edit and save your biography there; it's kept with your multiplayer profile (`Bio` in `OstranautsMP_profile.json`). The **Me** / other-player tabs show either player; the biography is sent to the other player on connect and when it changes.
+- Speech bubbles stack: a new line gets its own bubble at the bottom, the older ones float up and fade on their own timers, up to three per speaker.
+
+### Changed
+- In multiplayer, game windows that pause the game (shops, jobs, finance, transit, ship broker...) no longer pause it. Space and the pause while the client loads work as before.
+
+### Fixed
+- Client: the host's character (or anyone) vanished after walking onto a docked ship; changing clothes didn't help, reconnecting did. Positions now carry the ship, and the client moves the person onto it as on the host.
+
+## [0.34.4] - 2026-11-07
+
+### Added
+- The client's character gets a working PDA on the wrist (like a new player's: a PDA with a random cartridge) when claimed or made as a new body, so the vizor (Power, Damage... on the PDA) works for the client. Crew members and new bodies come with a locked PDA, which the vizor doesn't take; it goes into their inventory. Nothing changes if they already have a working one.
+
+## [0.34.3] - 2026-11-07
+
+### Fixed
+- Client: "No Slotted PDAs found. Vizor app requires…" repeated thousands of times (seen after a new body). The vizor's one-shot reset flag on the client's character was never cleared on the host, so every full condition update brought it back and the client's vizor reset again. The host now clears it once it's sent.
+- Quick chat: the first letter was sometimes lost ("от так" for "вот так"). A field that gets the focus selects its text, and the next key replaced it; the caret now goes to the end instead.
+
+## [0.34.2] - 2026-11-07
+
+### Changed
+- Character editor, **Skills** tab: text and check boxes 1.5 times bigger; clicking a skill's name ticks it too.
+- The client's death window reads in the game's voice: "CLONE LINK LOST", a lost link to the clone, a new neural code at a station, and a warning about 20% neurodegeneration of cognition and skills.
+
+## [0.34.1] - 2026-11-07
+
+### Changed
+- A new body (the first one too) comes as the profile made it: none of the game's random training for a new crew member; after a death, only 80% of the last body's.
+- "In port" means a faction's working station (OKLG and the like): on it or docked with it. Abandoned stations (derelict or nobody's) don't count.
+
+### Fixed
+- Client: while dead, the client could select and order other people (the host ignored it, but they jerked about on the client). Now the client only watches.
+- After a reconnect, **New body** in the pick window asked with the dead body's name and only got "name is taken". The host now opens the death window for it (with a free name).
+- The dead body is also looked for among a ship's saved items, in case the game files it there.
+
+## [0.34.0] - 2026-11-07
+
+### Added
+- **Death of the client's character.** The host decides it; the client's character no longer dies on the client by itself (except while apart, where it's only logged).
+  - The body stays with its name, things and history; it's no longer marked as the profile's.
+  - The client stays in the game watching (free camera, no orders) with a **Your character died** window: a name for the next body (the old one with II, III... by default) and a **New body** button. The button works while the host's ship is in port (docked with a station, or the host is on one).
+  - The new body is made like the first one (looks and skills from the profile), with the name asked for, and gets 80% of the last body's training (Training: ...). Skills learned in the game are lost until trained again. The name must be free; if it's taken, the host suggests the next free one. The client's profile takes the new name.
+  - A client that reconnects after its character died gets the same window.
+- The very first body of a profile is made as before, anywhere.
+
+### Not handled
+- The host's own death (the game's game over, as before) and a death while apart (only logged).
+
+## [0.33.3] - 2026-11-06
+
+### Fixed
+- New body: a profile whose character had died couldn't get a new body (the dead body still counted as "your character", here or on a ship the host left). Dead characters no longer count, and the client's **Choose your character** list no longer shows dead crew members.
+
+## [0.33.2] - 2026-11-06
+
+### Fixed
+- New body: a profile could get a second body when its character was somewhere the host isn't (a station the host had left), because the host only looked at what it had loaded. The host now also looks at the ships it has unloaded and answers "your character <name> is on <place>".
+
 ## [0.33.1] - 2026-11-06
 
 ### Fixed

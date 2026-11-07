@@ -124,6 +124,14 @@ namespace OstranautsMP
 			{
 				Plugin.Net.Send("CONDS " + Sb);
 			}
+			// One-shot flags for the PDA's own screen (the vizor resets when it sees IsPDAVizReset and clears it): only
+			// the client's PDA screen runs for their character, so it's cleared here once sent, else the full resend
+			// above brings it back every few seconds and the client's vizor resets (and complains) again and again.
+			CondOwner mine = CrewClaim.HostClaimed;
+			if (mine != null && !mine.bDestroyed && mine.HasCond("IsPDAVizReset"))
+			{
+				mine.ZeroCondAmount("IsPDAVizReset");
+			}
 		}
 
 		// Null for rooms that can't be keyed or don't hold a simulated atmosphere (space).

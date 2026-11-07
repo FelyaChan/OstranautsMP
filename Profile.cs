@@ -42,6 +42,9 @@ namespace OstranautsMP
 
 			// Skill conditions (Skill*) picked in the editor, up to MaxSkills. A new body gets these (CrewClaim).
 			public string[] Skills;
+
+			// Free text the player writes in the PDA's PROFILE app; others see it there too.
+			public string Bio;
 		}
 
 		internal const string Gpm = "MPProfile";
@@ -153,6 +156,28 @@ namespace OstranautsMP
 			{
 				Plugin.Log.LogError("Profile: could not save " + FilePath + ": " + e.Message);
 			}
+		}
+
+		// From the PDA's PROFILE app.
+		internal static void SetBio(string bio)
+		{
+			if (Current == null)
+			{
+				return;
+			}
+			Current.Bio = bio;
+			Write();
+		}
+
+		// A new body after a death (Death) has a new name.
+		internal static void SetName(string name)
+		{
+			if (Current == null || string.IsNullOrEmpty(name))
+			{
+				return;
+			}
+			Current.Name = name;
+			Write();
 		}
 
 		// The character is gone: looks, name, skills and the avatar. The profile gets a new ID, so crew members the old
@@ -345,6 +370,7 @@ namespace OstranautsMP
 			_edit.Gender = Current.Gender ?? "IsMale";
 			_edit.Attract = (Current.Attract != null) ? (string[])Current.Attract.Clone() : new string[0];
 			_edit.Skills = (Current.Skills != null) ? (string[])Current.Skills.Clone() : new string[0];
+			_edit.Bio = Current.Bio;
 			_edit.Body = Current.Body;
 			_edit.Face = (Current.Face != null && Current.Face.Length > 0) ? (string[])Current.Face.Clone() : FaceAnim2.GetRandomFace(_edit.Gender != "IsFemale", _edit.Gender != "IsMale");
 			_edit.Skin = Current.Skin ?? FaceAnim2.GetFaceGroups(_edit.Face)[0];
@@ -594,10 +620,43 @@ namespace OstranautsMP
 			GUILayout.EndHorizontal();
 		}
 
+		// The Skills tab: text and check boxes at 1.5 the window's.
+		private const float SkillScale = 1.5f;
+
+		private static GUIStyle _skillText;
+
+		private static GUIStyle _skillCheck;
+
+		private static int _skillBase;
+
+		private static void SkillStyles()
+		{
+			int size = GUI.skin.label.fontSize;
+			if (_skillText != null && _skillBase == size)
+			{
+				return;
+			}
+			_skillBase = size;
+			_skillText = new GUIStyle(GUI.skin.label);
+			_skillText.fontSize = Mathf.RoundToInt(size * SkillScale);
+			_skillText.wordWrap = false;
+			_skillText.alignment = TextAnchor.MiddleLeft;
+			_skillCheck = new GUIStyle();
+			_skillCheck.normal.background = MenuLook.CheckOff;
+			_skillCheck.hover.background = MenuLook.CheckOff;
+			_skillCheck.active.background = MenuLook.CheckOn;
+			_skillCheck.onNormal.background = MenuLook.CheckOn;
+			_skillCheck.onHover.background = MenuLook.CheckOn;
+			_skillCheck.onActive.background = MenuLook.CheckOff;
+			_skillCheck.margin = new RectOffset(4, 8, 4, 4);
+		}
+
 		private static void DrawSkills()
 		{
+			SkillStyles();
+			float box = Mathf.Round(_skillText.fontSize * 1.1f);
 			List<string> chosen = new List<string>(_edit.Skills ?? new string[0]);
-			GUILayout.Label("Chosen: " + chosen.Count + " / " + MaxSkills);
+			GUILayout.Label("Chosen: " + chosen.Count + " / " + MaxSkills, _skillText);
 			_skillScroll = GUILayout.BeginScrollView(_skillScroll, GUILayout.Height(MenuLook.Big(420f)));
 			if (_skillList != null)
 			{
@@ -605,7 +664,14 @@ namespace OstranautsMP
 				{
 					bool on = chosen.Contains(skill.Key);
 					GUI.enabled = on || chosen.Count < MaxSkills;
-					bool now = GUILayout.Toggle(on, " " + skill.Value);
+					GUILayout.BeginHorizontal();
+					bool now = GUILayout.Toggle(on, GUIContent.none, _skillCheck, GUILayout.Width(box), GUILayout.Height(box));
+					// The name toggles too.
+					if (GUILayout.Button(skill.Value, _skillText))
+					{
+						now = !on;
+					}
+					GUILayout.EndHorizontal();
 					GUI.enabled = true;
 					if (now && !on)
 					{

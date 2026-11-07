@@ -19,7 +19,7 @@ namespace OstranautsMP
 
 		public const string PluginName = "Ostranauts Multiplayer";
 
-		public const string Version = "0.33.1";
+		public const string Version = "0.35.1";
 
 		internal static ManualLogSource Log;
 
@@ -229,7 +229,7 @@ namespace OstranautsMP
 
 		private static void RouteMessage(string cmd, string arg)
 		{
-			if (!WorldSync.OnMessage(cmd, arg, Time.unscaledTime) && !OrderSync.OnMessage(cmd, arg) && !ItemSync.OnMessage(cmd, arg, Time.unscaledTime) && !CrewClaim.OnMessage(cmd, arg) && !Chat.OnMessage(cmd, arg) && !DockSync.OnMessage(cmd, arg) && !ShipSync.OnMessage(cmd, arg, Time.unscaledTime) && !Budget.OnMessage(cmd, arg) && !PlayerInteractions.OnMessage(cmd, arg) && !Apart.OnMessage(cmd, arg) && !WorkProgress.OnMessage(cmd, arg) && !Ownership.OnMessage(cmd, arg) && !Mirror.OnMessage(cmd, arg) && !Highlights.OnMessage(cmd, arg) && !ClientLoad.OnMessage(cmd, arg))
+			if (!WorldSync.OnMessage(cmd, arg, Time.unscaledTime) && !OrderSync.OnMessage(cmd, arg) && !ItemSync.OnMessage(cmd, arg, Time.unscaledTime) && !CrewClaim.OnMessage(cmd, arg) && !Chat.OnMessage(cmd, arg) && !DockSync.OnMessage(cmd, arg) && !ShipSync.OnMessage(cmd, arg, Time.unscaledTime) && !Budget.OnMessage(cmd, arg) && !PlayerInteractions.OnMessage(cmd, arg) && !Apart.OnMessage(cmd, arg) && !WorkProgress.OnMessage(cmd, arg) && !Ownership.OnMessage(cmd, arg) && !Mirror.OnMessage(cmd, arg) && !Highlights.OnMessage(cmd, arg) && !ClientLoad.OnMessage(cmd, arg) && !PdaProfile.OnMessage(cmd, arg))
 			{
 				SaveSync.OnMessage(cmd, arg);
 			}
@@ -335,6 +335,7 @@ namespace OstranautsMP
 			}
 			Highlights.OnGUI();
 			PdaChat.OnGUI();
+			PdaProfile.OnGUI();
 			CrewClaim.OnGUI();
 			Apart.OnGUI();
 			ClientLoad.OnGUI();

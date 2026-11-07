@@ -10,7 +10,7 @@ namespace OstranautsMP
 	// client's own predicted action may not match what the host does, so the host's bars are shown there as well.
 	//
 	// Protocol (host -> client):
-	//   PROG <personID>|<interaction>|<targetID>|<duration s>|<elapsed s>|<long bar: current>|<long bar: max>   a bar starts
+	//   PROG <personID>|<interaction>|<targetID>|<duration s>|<elapsed s>|<long bar: current>|<long bar: max>|<label>   a bar starts
 	// Each person has their own clock (CondOwner.Clock), anchored differently on each machine, so the bar's start is
 	// sent as time already elapsed, not as a clock reading. The long bar (work left on the target) comes from the
 	// host as well: the target's progress condition may not have reached the client yet.
@@ -29,6 +29,10 @@ namespace OstranautsMP
 
 		private static readonly AccessTools.FieldRef<ProgressBar, float> LongMax = AccessTools.FieldRefAccess<ProgressBar, float>("_longBarLengthMax");
 
+		// The label over the bar: the job and its rate ("repair x1.4"), as the host works it out (the client's own
+		// count misses the tools in use and shows x0.0).
+		private static readonly AccessTools.FieldRef<ProgressBar, TMPro.TextMeshPro> BarText = AccessTools.FieldRefAccess<ProgressBar, TMPro.TextMeshPro>("text");
+
 		private static readonly AccessTools.FieldRef<ProgressBar, bool> LongOn = AccessTools.FieldRefAccess<ProgressBar, bool>("_longBarState");
 
 		// Client: inside a bar we start for the host.
@@ -42,6 +46,12 @@ namespace OstranautsMP
 
 		private static bool HostSending => Plugin.Net.CurrentMode == NetSession.Mode.Host && Plugin.Net.Connected && WorldSync.InGame;
 
+		private static string Label(ProgressBar bar)
+		{
+			TMPro.TextMeshPro t = BarText(bar);
+			return (t != null && t.text != null) ? t.text.Replace('|', '/').Replace('\n', ' ') : "";
+		}
+
 		private static void ActivatePostfix(ProgressBar __instance, float duration, Interaction interaction)
 		{
 			if (!HostSending || interaction == null || interaction.objUs == null || interaction.strName == null || duration > 60f || !Apart.HostSends(interaction.objUs))
@@ -51,7 +61,7 @@ namespace OstranautsMP
 			CondOwner us = interaction.objUs;
 			double elapsed = us.Clock.Epoch - BarStart(__instance);
 			bool longOn = LongOn(__instance);
-			Plugin.Net.Send("PROG " + us.strID + "|" + interaction.strName + "|" + ((interaction.objThem != null) ? interaction.objThem.strID : "") + "|" + duration.ToString("R", Inv) + "|" + elapsed.ToString("R", Inv) + "|" + (longOn ? LongNow(__instance).ToString("R", Inv) : "") + "|" + (longOn ? LongMax(__instance).ToString("R", Inv) : ""));
+			Plugin.Net.Send("PROG " + us.strID + "|" + interaction.strName + "|" + ((interaction.objThem != null) ? interaction.objThem.strID : "") + "|" + duration.ToString("R", Inv) + "|" + elapsed.ToString("R", Inv) + "|" + (longOn ? LongNow(__instance).ToString("R", Inv) : "") + "|" + (longOn ? LongMax(__instance).ToString("R", Inv) : "") + "|" + Label(__instance));
 		}
 
 		// Host: a bar ends, tell the client. Client: the local AI's own guesses (a walk, an empty queue, a cancel) don't
@@ -127,6 +137,10 @@ namespace OstranautsMP
 				ia.objUs = us;
 				ia.objThem = them;
 				bar.Activate(duration, hasLong, ia);
+				if (f.Length >= 8 && f[7].Length > 0 && BarText(bar) != null)
+				{
+					BarText(bar).text = f[7];
+				}
 				// From when the host started it, on this machine's clock for that person, so both bars fill together.
 				BarStart(bar) = us.Clock.Epoch - Math.Max(0.0, elapsed);
 				if (hasLong)

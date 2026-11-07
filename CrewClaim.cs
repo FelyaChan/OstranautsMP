@@ -18,8 +18,9 @@ namespace OstranautsMP
 	//
 	// A new body: instead of a crew member, the client can have the host make a new one from its profile (looks, name,
 	// skills) and no money, straight into the host's crew at a crew spawn point of the host's ship. One per profile:
-	// while the profile has a crew member here, the client picks them. The host sends the new person over (PersonSync)
-	// and confirms as usual.
+	// while the profile has a crew member here, the client picks them; if they're somewhere the host isn't (a ship
+	// not loaded on the host), the host says where. The host sends the new person over (PersonSync) and confirms as
+	// usual.
 	//
 	// Protocol: client -> host CLAIM <id>|<profile ID>|<base64 JSON Mirror.Look, or empty>
 	//                          NEWBODY <profile ID>|<base64 JSON Profile.Data>;
@@ -59,6 +60,7 @@ namespace OstranautsMP
 			harmony.Patch(AccessTools.Method(typeof(CondOwner), "QueueInteraction"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(NoClientUIOnHost)));
 			harmony.Patch(AccessTools.Method(typeof(CrewSim), "RaiseUI"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(NotWhileRelaying)));
 			harmony.Patch(AccessTools.Method(typeof(Ostranauts.InputControl.CommandInventory), "ToggleInventory"), prefix: new HarmonyMethod(typeof(CrewClaim), nameof(NotWhileRelaying)));
+			Death.Patch(harmony);
 		}
 
 		// Host: the client's character's actions don't open windows here (they open on the client, who does them too).
@@ -99,6 +101,43 @@ namespace OstranautsMP
 
 		// Client: the claimed character, once confirmed and in game.
 		internal static CondOwner ClientMine => Locked ? Mine : null;
+
+		// Client: the claimed character's ID, and whether the host has confirmed it.
+		internal static string MineId => _mine;
+
+		internal static bool Confirmed => _confirmed;
+
+		// Client: our character died (Death); no character until a new body.
+		internal static void ClientLost()
+		{
+			_mine = null;
+			_confirmed = false;
+			_status = null;
+			_claimLook = null;
+		}
+
+		// Host: the client's character died (Death); their orders are no longer taken.
+		internal static void HostCharacterDied(string id)
+		{
+			if (_claimed != null && _claimed == id)
+			{
+				_claimed = null;
+			}
+		}
+
+		// Host: the profile has a living character, here or on a ship that isn't loaded.
+		internal static bool HasLivingCharacter(string profileId)
+		{
+			foreach (CondOwner co in DataHandler.mapCOs.Values)
+			{
+				if (co != null && !co.bDestroyed && co.bAlive && Profile.OwnerOf(co) == profileId)
+				{
+					return true;
+				}
+			}
+			string shipName;
+			return OwnedAway(profileId, out shipName) != null;
+		}
 
 		// The client's character on this machine (host: the claimed one; client: our own).
 		private static bool IsClientCharacter(CondOwner co)
@@ -197,7 +236,16 @@ namespace OstranautsMP
 		// Other people can't be selected; objects still can.
 		private static bool SelectCOPrefix(CondOwner co, bool bUnselect)
 		{
-			if (bUnselect || co == null || !Locked || !co.HasCond("IsHuman"))
+			if (bUnselect || co == null || !co.HasCond("IsHuman"))
+			{
+				return true;
+			}
+			// Dead: only watching, nobody to select.
+			if (Death.ClientDead)
+			{
+				return false;
+			}
+			if (!Locked)
 			{
 				return true;
 			}
@@ -285,6 +333,7 @@ namespace OstranautsMP
 
 		public static void Update()
 		{
+			Death.Update(Time.unscaledTime);
 			if (!Plugin.Net.Connected)
 			{
 				_claimed = null;
@@ -336,7 +385,7 @@ namespace OstranautsMP
 				}
 				foreach (CondOwner co in ship.GetPeople(bAllowDocked: false))
 				{
-					if (co != null && !co.bDestroyed && co != player && co.Company == player.Company && co.HasCond("IsHuman") && !list.Contains(co))
+					if (co != null && !co.bDestroyed && co.bAlive && co != player && co.Company == player.Company && co.HasCond("IsHuman") && !list.Contains(co))
 					{
 						list.Add(co);
 					}
@@ -348,6 +397,11 @@ namespace OstranautsMP
 		// Client: the picker, shown in game until a character is confirmed.
 		public static void OnGUI()
 		{
+			if (Death.ClientDead && Plugin.Net.CurrentMode == NetSession.Mode.Client && Plugin.Net.Connected && WorldSync.InGame && WorldSync.ClientFollowsHost)
+			{
+				Death.OnGUI();
+				return;
+			}
 			if (_confirmed || Plugin.Net.CurrentMode != NetSession.Mode.Client || !Plugin.Net.Connected || !WorldSync.InGame || !WorldSync.ClientFollowsHost)
 			{
 				return;
@@ -459,6 +513,7 @@ namespace OstranautsMP
 						_mine = (f.Length > 1) ? f[1] : f[0];
 						_confirmed = true;
 						_status = null;
+						Death.ClientNewBody();
 						FocusMine();
 						Plugin.Log.LogInfo("Playing as " + MineName);
 					}
@@ -468,10 +523,11 @@ namespace OstranautsMP
 					{
 						_mine = null;
 						_status = "Denied: " + arg;
+						Death.ClientDenied(arg);
 					}
 					return true;
 				default:
-					return false;
+					return Death.OnMessage(cmd, arg);
 			}
 		}
 
@@ -523,10 +579,84 @@ namespace OstranautsMP
 			{
 				Mirror.Apply(co, look);
 			}
+			GivePda(co);
 			_claimed = co.strID;
 			Budget.MarkClientCharacter(co);
 			Plugin.Net.Send("CLAIMED " + id + "|" + co.strID);
 			Plugin.Log.LogInfo("Client plays as " + co.strName);
+		}
+
+		// Host: the client's character gets a working PDA on the wrist, as a new player's (the game's
+		// ItmWristPDA01NewPlayer: a PDA with a random cartridge), so their vizor works. Crew members and new bodies
+		// come with a locked one (ItmWristPDA01Locked), which the vizor doesn't take: it goes into their inventory
+		// (or away if there's no room). Nothing changes if they already have a working one.
+		private static void GivePda(CondOwner co)
+		{
+			try
+			{
+				CondTrigger working = DataHandler.GetCondTrigger("TIsWristSlotted");
+				List<CondOwner> have = co.GetCOs(bAllowLocked: false, working);
+				if (working == null || co.compSlots == null || (have != null && have.Count > 0))
+				{
+					return;
+				}
+				Loot loot = DataHandler.GetLoot("ItmWristPDA01NewPlayer");
+				List<CondOwner> made = (loot != null) ? loot.GetCOLoot(co, bSuppressOverride: false) : null;
+				if (made == null || made.Count == 0)
+				{
+					Plugin.Log.LogWarning("PDA: no ItmWristPDA01NewPlayer for " + co.strName);
+					return;
+				}
+				// The old PDA off the wrist.
+				foreach (CondOwner old in new List<CondOwner>(co.GetCOs(bAllowLocked: true)))
+				{
+					if (old != null && old.HasCond("IsWristSlotted"))
+					{
+						co.compSlots.UnSlotItem(old, bForce: true);
+						CondOwner left = co.AddCO(old, bEquip: false, bOverflow: true, bIgnoreLocks: true);
+						if (left != null)
+						{
+							left.Destroy();
+						}
+					}
+				}
+				CondTrigger cart = DataHandler.GetCondTrigger("TIsPDACartridge");
+				CondOwner pda = null;
+				foreach (CondOwner item in made)
+				{
+					if (item != null && item.mapSlotEffects != null && item.mapSlotEffects.Count > 0 && pda == null)
+					{
+						foreach (string key in item.mapSlotEffects.Keys)
+						{
+							if (co.compSlots.SlotItem(key, item))
+							{
+								pda = item;
+								break;
+							}
+						}
+						if (pda != null)
+						{
+							continue;
+						}
+					}
+					if (item == null)
+					{
+						continue;
+					}
+					// A cartridge the loot gave separately goes into the PDA; anything else into the inventory.
+					CondOwner into = (pda != null && cart != null && cart.Triggered(item)) ? pda : co;
+					CondOwner rest = into.AddCO(item, bEquip: false, bOverflow: true, bIgnoreLocks: true);
+					if (rest != null)
+					{
+						rest.Destroy();
+					}
+				}
+				Plugin.Log.LogInfo("PDA: " + co.strName + (pda != null ? " got a working PDA" : " got no PDA slotted"));
+			}
+			catch (Exception e)
+			{
+				Plugin.Log.LogError("PDA for " + co.strName + ": " + e);
+			}
 		}
 
 		// Host: a new crew member made from the client's profile.
@@ -564,11 +694,50 @@ namespace OstranautsMP
 			}
 			foreach (CondOwner other in DataHandler.mapCOs.Values)
 			{
-				if (other != null && !other.bDestroyed && Profile.OwnerOf(other) == profileId)
+				// A dead body of theirs doesn't count: they get a new one.
+				if (other != null && !other.bDestroyed && other.bAlive && Profile.OwnerOf(other) == profileId)
 				{
 					Plugin.Net.Send("CLAIM_DENIED you already have " + other.strName + " here");
 					return;
 				}
+			}
+			string shipName;
+			string away = OwnedAway(profileId, out shipName);
+			if (away != null)
+			{
+				Plugin.Net.Send("CLAIM_DENIED your character " + away + " is on " + shipName);
+				return;
+			}
+			// After a death (Death): only in port, with a name nobody has, and with the last body's training.
+			string lastBody;
+			Dictionary<string, string> lastDeath = Death.LastDeath(profileId, out lastBody);
+			if (lastDeath != null)
+			{
+				// The client may not know yet (asked from the pick window after a reconnect): the death window.
+				if (lastBody != null)
+				{
+					Plugin.Net.Send("DIED " + lastBody);
+				}
+				if (!Death.InPort())
+				{
+					Plugin.Net.Send("CLAIM_DENIED the host's ship isn't in port");
+					return;
+				}
+				string name = (data.Name ?? "").Trim();
+				string why = Mirror.NameProblem(name, null);
+				if (why != null && !DataHandler.mapCOs.ContainsKey(name))
+				{
+					Plugin.Net.Send("CLAIM_DENIED name: " + why);
+					return;
+				}
+				if (!Death.NameFree(name))
+				{
+					string free = Death.FreeName(Death.NextName(name));
+					Plugin.Net.Send("NAMETAKEN " + free);
+					Plugin.Net.Send("CLAIM_DENIED the name " + name + " is taken, try " + free);
+					return;
+				}
+				data.Name = name;
 			}
 			// The game's own new crew member (the console's makecrew): a random person at a crew spawn tile of the
 			// host's ship, with their own random skills, traits and things.
@@ -580,10 +749,18 @@ namespace OstranautsMP
 			}
 			JoinCrew(co, player);
 			SetSkills(co, data.Skills);
+			// The profile's character, not a random person: none of the game's random training, only the last
+			// body's (after a death).
+			Death.ResetTraining(co);
+			if (lastDeath != null)
+			{
+				Death.ApplyTraining(co, lastDeath);
+			}
 			// Starts with an empty wallet (the game gave them random money); the host gives money and sets a salary in
 			// the BUDGET app.
 			co.ZeroCondAmount(Ledger.CURRENCY);
 			Profile.SetOwner(co, profileId);
+			GivePda(co);
 			Mirror.Look look = new Mirror.Look();
 			look.NewId = data.Name;
 			look.Face = data.Face;
@@ -597,6 +774,69 @@ namespace OstranautsMP
 			PersonSync.HostSend(co);
 			Plugin.Net.Send("CLAIMED " + co.strID + "|" + co.strID);
 			Plugin.Log.LogInfo("New body for the client: " + co.strName);
+		}
+
+		// Whether a person of an unloaded ship is alive: their live object if the game keeps one (a shallow ship),
+		// else their saved data in the ship's; alive if neither says.
+		private static bool AliveAway(Ship ship, string id)
+		{
+			CondOwner co;
+			if (id != null && DataHandler.mapCOs.TryGetValue(id, out co) && co != null && !co.bDestroyed)
+			{
+				return co.bAlive;
+			}
+			if (ship.json.aCOs != null)
+			{
+				foreach (JsonCondOwnerSave s in ship.json.aCOs)
+				{
+					if (s != null && s.strID == id)
+					{
+						return s.bAlive;
+					}
+				}
+			}
+			return true;
+		}
+
+		// A crew member of this profile on a ship that isn't loaded here (a station the host left): the ship's data keeps
+		// them with their GUI property maps, the profile's mark among them. Their ID, or null.
+		private static string OwnedAway(string profileId, out string shipName)
+		{
+			shipName = null;
+			if (CrewSim.system == null || CrewSim.system.dictShips == null)
+			{
+				return null;
+			}
+			foreach (Ship ship in CrewSim.system.dictShips.Values)
+			{
+				if (ship == null || ship.bDestroyed || ship.LoadState >= Ship.Loaded.Full || ship.json == null || ship.json.aCrew == null)
+				{
+					continue;
+				}
+				foreach (JsonItem it in ship.json.aCrew)
+				{
+					if (it == null || it.aGPMSettings == null)
+					{
+						continue;
+					}
+					foreach (JsonGUIPropMap g in it.aGPMSettings)
+					{
+						if (g == null || g.strName != Profile.Gpm || g.dictGUIPropMap == null)
+						{
+							continue;
+						}
+						for (int i = 0; i + 1 < g.dictGUIPropMap.Length; i += 2)
+						{
+							if (g.dictGUIPropMap[i] == "id" && g.dictGUIPropMap[i + 1] == profileId && AliveAway(ship, it.strID))
+							{
+								shipName = string.IsNullOrEmpty(ship.publicName) ? ship.strRegID : ship.publicName;
+								return it.strID;
+							}
+						}
+					}
+				}
+			}
+			return null;
 		}
 
 		// Into the host's company like a hire (Hire.UpdateThem), without the contract: no signing bonus, salary or
