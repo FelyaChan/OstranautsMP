@@ -147,6 +147,15 @@ namespace OstranautsMP
 			ship.AddCO(co, bTiles: true);
 			co.SetCrewZOffset();
 			co.PostGameLoad(Ship.Loaded.Full);
+			// Made from saved data, so the game froze their conditions until the load is over (Ship.PostGameLoad thaws
+			// them); this isn't a ship load, so thaw them here, else nothing can change them here (not even CONDS).
+			co.bFreezeConds = false;
+			co.bFreezeCondRules = false;
+			foreach (CondOwner sub in co.GetCOsSafe(bAllowLocked: true))
+			{
+				sub.bFreezeConds = false;
+				sub.bFreezeCondRules = false;
+			}
 			FaceAnim2.GetPNG(co);
 			if (p.Rules != null && co.Company != null && co.Company.mapRoster != null)
 			{

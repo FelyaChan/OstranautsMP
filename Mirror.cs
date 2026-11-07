@@ -54,6 +54,8 @@ namespace OstranautsMP
 
 		private static readonly AccessTools.FieldRef<GUIChargenBody, TMP_InputField> NameBox = AccessTools.FieldRefAccess<GUIChargenBody, TMP_InputField>("tboxName");
 
+		private static readonly char[] ProtocolChars = new char[] { ',', ';', '=', '|', '\n', '\r' };
+
 		private static readonly char[] Forbidden = (char[])AccessTools.Field(typeof(GUIChargenBody), "FORBIDDEN_WINDOWS_CHARACTERS").GetValue(null);
 
 		private static readonly string[] LedgerLists = { "aHourly", "aShiftly", "aDaily", "aMonthly", "aYearly", "aMortgage" };
@@ -238,6 +240,11 @@ namespace OstranautsMP
 			if (Forbidden != null && name.IndexOfAny(Forbidden) >= 0)
 			{
 				return "it has characters that can't be used";
+			}
+			// A name is a person's ID, and the multiplayer messages split their fields on these.
+			if (name.IndexOfAny(ProtocolChars) >= 0)
+			{
+				return "it can't have , ; = or |";
 			}
 			CondOwner other;
 			if (DataHandler.mapCOs.TryGetValue(name, out other) && other != null && other != co)

@@ -3,6 +3,70 @@
 All notable changes to the Ostranauts Multiplayer Mod.
 Host and client must run the same version.
 
+## [0.36.1] - 2026-11-07
+
+### Fixed
+- Client: after a death, the new body's name wasn't saved to the profile, and "Waiting for host..." vanished with **New body** clickable again. The host's repeated DIED for the same body (sent with every new body asked for) reset the death window; it's now ignored. (First fixed as 0.35.2 on the desktop copy; that fix was lost when the files were overwritten later.)
+
+## [0.36.0] - 2026-11-07
+
+### Changed
+- Lighter logging. The per-instance log (`OstranautsMP_<n>.log`) is written to disk once a second instead of after every line (the whole Unity log goes through it); errors and crashes are still written at once. The memory line is every minute instead of every 10 seconds and shows only the managed heap (the other two figures always read 0 under Unity). Walking orders and doors opening or closing are no longer logged.
+- Host: "Resume Task(s)" and "Cancel Task" from the client are no longer pre-checked for the log. They're menu wrappers the game itself doesn't check, so the log always said "Unable to comply" though the action went ahead.
+
+### Removed
+- The temporary vizor log (0.35.6) and the "Loose item" log (0.35.5): they did their job.
+
+## [0.35.11] - 2026-11-07
+
+### Added
+- Temporary log (to be removed): with each client menu action, both sides log the character's satiety and hydration and their hidden level flags (`DcSatiety…`, `DcHydration…`), to find why the host refused "Eat (Not Hungry)".
+
+## [0.35.10] - 2026-11-07
+
+### Changed
+- Host log: each client resync now names the items (kind, ID, where they are on the host and on the client), not just counts.
+
+## [0.35.9] - 2026-11-07
+
+### Fixed
+- A player's character jettisoned into space (the game allows it for the unconscious, stunned or recovering, not just the dead) vanished on the host without dying and lived on on the client. Now they die the usual way first (DIED, the new-body window), the client drops the body too, and the death record (training for the new body) is kept on the host until the game is restarted.
+
+## [0.35.8] - 2026-11-07
+
+### Fixed
+- An item leaving a hand or a slot for a place the mod doesn't sync (into a placeholder while it's installed, a trade screen) stayed where it was on the client: e.g. after the host installed something they were dragging, the client kept seeing them drag it. The host now tells the client it's gone from there; the client hides it until its next place arrives.
+
+## [0.35.7] - 2026-11-07
+
+### Fixed
+- Client: a person the host sends whole (a new body, someone who came on board) had their conditions frozen for good, the way the game freezes everything it makes from saved data until a ship load ends. Nothing could change them on the client, not even the host's CONDS: the client's new body kept stale stats, and the vizor reset flag never cleared, so the vizor rebuilt every frame and logged "No Slotted PDAs found…" endlessly.
+- New body: the old wrist PDA went straight back on the wrist (the wrist is a hold slot), so the new PDA still didn't fit. The old one now goes to the inventory after the new one is on.
+
+## [0.35.6] - 2026-11-07
+
+### Fixed
+- New body: the PDA the host gives didn't go on the wrist when the random person already wore one (a locked PDA), so the client had no working PDA and the game said "No Slotted PDAs found…" in the log again and again. Whatever is on the wrist now comes off first (into the inventory); the log names it.
+
+### Added
+- Temporary client log: each vizor rebuild (first 40) with who's selected, the reset flag and the callers, to find what keeps rebuilding it.
+
+## [0.35.5] - 2026-11-07
+
+### Changed
+- Item check: back to how 0.35.3 placed items (0.35.4's "on the floor" guess for stale-parent items could put items on the client's floor that the host doesn't show). Only the log line stays: each item with a stale parent is named once (`Loose item …`), to learn what they are.
+
+## [0.35.3] - 2026-11-07
+
+### Fixed
+- Character names can't have `,` `;` `=` or `|` any more (character editor, mirror, new body, death window). A name is the person's ID, and the multiplayer messages split on these: such a name broke positions, conditions and the item check for that person.
+
+## [0.35.2] - 2026-11-07
+
+### Added
+- Version check: if the other player has another version of the mod, both sides drop the connection and say which versions (in the middle of the screen, in the chat and in the Multiplayer window). Before, different versions played on and quietly broke.
+- Connection lost in the game (the other player crashed, left or timed out): both sides see it in the middle of the screen and in the chat, and the game is paused on both.
+
 ## [0.35.1] - 2026-11-07
 
 ### Fixed

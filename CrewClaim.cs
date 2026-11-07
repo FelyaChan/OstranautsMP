@@ -607,17 +607,21 @@ namespace OstranautsMP
 					Plugin.Log.LogWarning("PDA: no ItmWristPDA01NewPlayer for " + co.strName);
 					return;
 				}
-				// The old PDA off the wrist.
-				foreach (CondOwner old in new List<CondOwner>(co.GetCOs(bAllowLocked: true)))
+				// Whatever is on the wrist off it (a locked or broken PDA: a random person's can be on without IsWristSlotted).
+				// Into the inventory only after the new one is on: the wrist is a hold slot, so AddCO would put it back there.
+				List<CondOwner> off = new List<CondOwner>();
+				Slot wrist = co.compSlots.GetSlot("wristL");
+				if (wrist != null && wrist.aCOs != null)
 				{
-					if (old != null && old.HasCond("IsWristSlotted"))
+					foreach (CondOwner old in new List<CondOwner>(wrist.aCOs))
 					{
-						co.compSlots.UnSlotItem(old, bForce: true);
-						CondOwner left = co.AddCO(old, bEquip: false, bOverflow: true, bIgnoreLocks: true);
-						if (left != null)
+						if (old == null)
 						{
-							left.Destroy();
+							continue;
 						}
+						Plugin.Log.LogInfo("PDA: took " + old.strCODef + " off the wrist of " + co.strName);
+						co.compSlots.UnSlotItem(old, bForce: true);
+						off.Add(old);
 					}
 				}
 				CondTrigger cart = DataHandler.GetCondTrigger("TIsPDACartridge");
@@ -649,6 +653,14 @@ namespace OstranautsMP
 					if (rest != null)
 					{
 						rest.Destroy();
+					}
+				}
+				foreach (CondOwner old in off)
+				{
+					CondOwner left = co.AddCO(old, bEquip: false, bOverflow: true, bIgnoreLocks: true);
+					if (left != null)
+					{
+						left.Destroy();
 					}
 				}
 				Plugin.Log.LogInfo("PDA: " + co.strName + (pda != null ? " got a working PDA" : " got no PDA slotted"));

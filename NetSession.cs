@@ -346,6 +346,11 @@ namespace OstranautsMP
 				case "HELLO":
 					RemoteVersion = arg;
 					Plugin.Log.LogInfo("Remote plugin version: " + arg);
+					// Another version speaks another protocol: no playing together (each side finds out and drops).
+					if (Alert.VersionMismatch(arg))
+					{
+						PeerGone("has mod version " + arg + ", you have " + Plugin.Version + ": both need the same");
+					}
 					break;
 				case "PING":
 					Send("PONG " + arg);

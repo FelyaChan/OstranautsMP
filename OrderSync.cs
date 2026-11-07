@@ -126,7 +126,7 @@ namespace OstranautsMP
 				return true;
 			}
 			Plugin.Net.Send("PROCESS " + interaction.objUs.strID + "|" + ((interaction.objThem != null) ? interaction.objThem.strID : "") + "|" + interaction.strName);
-			Plugin.Log.LogInfo("Action sent: " + interaction.objUs.strName + " " + interaction.strName);
+			Plugin.Log.LogInfo("Action sent: " + interaction.objUs.strName + " " + interaction.strName + NeedsDiag(interaction.objUs));
 			_inProcess++;
 			__state = true;
 			return true;
@@ -165,7 +165,33 @@ namespace OstranautsMP
 			}
 			string line = "ORDER " + __instance.strID + "|" + ((coTarget != null) ? coTarget.strID : "") + "|" + ((objInt != null) ? objInt.strName : "") + "|" + (bPlayerOrdered ? "1" : "0") + "|" + (hasTile ? "1" : "0") + "|" + tileX + "|" + tileY + "|" + fPosX.ToString("R", Inv) + "|" + fPosY.ToString("R", Inv);
 			Plugin.Net.Send(line);
-			Plugin.Log.LogInfo("Order sent: " + __instance.strName + " " + ((objInt != null) ? objInt.strName : (hasTile ? "walk" : "?")));
+			if (objInt != null)
+			{
+				Plugin.Log.LogInfo("Order sent: " + __instance.strName + " " + objInt.strName);
+			}
+		}
+
+		// TEMP diagnostics (remove after the satiety fix): needs values and their hidden level flags (Dc...).
+		private static string NeedsDiag(CondOwner co)
+		{
+			if (co == null || co.mapConds == null)
+			{
+				return "";
+			}
+			System.Text.StringBuilder sb = new System.Text.StringBuilder(" [");
+			foreach (string stat in new string[] { "StatSatiety", "StatHydration" })
+			{
+				sb.Append(stat).Append('=').Append(co.GetCondAmount(stat).ToString("0.###", Inv)).Append(' ');
+			}
+			foreach (string name in co.mapConds.Keys)
+			{
+				if (name.StartsWith("DcSatiety", StringComparison.Ordinal) || name.StartsWith("DcHydration", StringComparison.Ordinal))
+				{
+					sb.Append(name).Append('=').Append(co.GetCondAmount(name).ToString("0.###", Inv)).Append(' ');
+				}
+			}
+			sb.Append("frozen rules: ").Append(co.bFreezeCondRules).Append(']');
+			return sb.ToString();
 		}
 
 		// Host side, main thread. Returns false if the message isn't ours.
@@ -244,7 +270,9 @@ namespace OstranautsMP
 			}
 			ia.objUs = us;
 			ia.objThem = them;
-			if (them != null)
+			Plugin.Log.LogInfo("Action received: " + us.strName + " " + f[2] + NeedsDiag(us));
+			// Resume/cancel task are menu wrappers: the game doesn't check their own conditions, so neither do we.
+			if (them != null && f[2] != "ACTResumeTaskThem" && f[2] != "ACTCancelTaskThem")
 			{
 				// Same check the menu makes; log why it fails here, the game only tells the character's message log.
 				bool chanceSkip = CondTrigger.bChanceSkip;
@@ -337,7 +365,10 @@ namespace OstranautsMP
 					PlayerMarker.AddMarker(us);
 				}
 			}
-			Plugin.Log.LogInfo("Order from client: " + us.strName + " " + ((ia != null) ? ia.strName : ((til != null) ? "walk" : "?")) + (issued ? "" : " (not issued)"));
+			if (ia != null || !issued)
+			{
+				Plugin.Log.LogInfo("Order from client: " + us.strName + " " + ((ia != null) ? ia.strName : ((til != null) ? "walk" : "?")) + (issued ? "" : " (not issued)"));
+			}
 		}
 	}
 }

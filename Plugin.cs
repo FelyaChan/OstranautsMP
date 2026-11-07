@@ -19,7 +19,7 @@ namespace OstranautsMP
 
 		public const string PluginName = "Ostranauts Multiplayer";
 
-		public const string Version = "0.35.1";
+		public const string Version = "0.36.1";
 
 		internal static ManualLogSource Log;
 
@@ -94,6 +94,8 @@ namespace OstranautsMP
 
 		private float _nextMemoryLog;
 
+		private float _nextLogFlush;
+
 		private void Awake()
 		{
 			InstanceLog.Start();
@@ -110,7 +112,12 @@ namespace OstranautsMP
 			Net.OnMessage = RouteMessage;
 			Net.OnConnected = OnPeerConnected;
 			Net.OnBinary = RouteBinary;
-			Net.OnPeerLost = Chat.OnPeerLost;
+			Net.OnPeerLost = delegate(string reason)
+			{
+				string who = (Chat.PeerName != null) ? Chat.PeerName : ((Net.CurrentMode == NetSession.Mode.Host) ? "The client" : "The host");
+				Chat.OnPeerLost(reason);
+				Alert.PeerLost(who, reason);
+			};
 			MenuLook.OnClick = OpenWindow;
 			Harmony harmony = new Harmony(Guid);
 			harmony.Patch(AccessTools.Method(typeof(MainMenu), "Start"), postfix: new HarmonyMethod(typeof(Plugin), nameof(MainMenuStartPostfix)));
@@ -242,8 +249,13 @@ namespace OstranautsMP
 			Apart.Update(Time.unscaledTime);
 			if (InstanceLog.Instance != null && Time.unscaledTime >= _nextMemoryLog)
 			{
-				_nextMemoryLog = Time.unscaledTime + 10f;
+				_nextMemoryLog = Time.unscaledTime + 60f;
 				InstanceLog.Instance.LogMemory();
+			}
+			if (InstanceLog.Instance != null && Time.unscaledTime >= _nextLogFlush)
+			{
+				_nextLogFlush = Time.unscaledTime + 1f;
+				InstanceLog.Instance.Flush();
 			}
 			if (Net.Connected && Time.unscaledTime >= _nextPing)
 			{
@@ -339,6 +351,7 @@ namespace OstranautsMP
 			CrewClaim.OnGUI();
 			Apart.OnGUI();
 			ClientLoad.OnGUI();
+			Alert.OnGUI();
 			PdaNotify.OnGUI();
 			if (Menu != null)
 			{
@@ -609,6 +622,10 @@ namespace OstranautsMP
 		private void OnApplicationQuit()
 		{
 			Net.Stop();
+			if (InstanceLog.Instance != null)
+			{
+				InstanceLog.Instance.Flush();
+			}
 		}
 	}
 }

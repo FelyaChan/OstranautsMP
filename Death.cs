@@ -72,6 +72,44 @@ namespace OstranautsMP
 		public static void Patch(Harmony harmony)
 		{
 			harmony.Patch(AccessTools.PropertySetter(typeof(CondOwner), "Kill"), prefix: new HarmonyMethod(typeof(Death), nameof(KillPrefix)), postfix: new HarmonyMethod(typeof(Death), nameof(KillPostfix)));
+			harmony.Patch(AccessTools.Method(typeof(CrewSim), "ScheduleCODestruction"), prefix: new HarmonyMethod(typeof(Death), nameof(DestroyBodyPrefix)));
+		}
+
+		// Host: death records of bodies the game destroyed (jettisoned), by body name. This session only.
+		private static readonly Dictionary<string, Dictionary<string, string>> Destroyed = new Dictionary<string, Dictionary<string, string>>();
+
+		// Host: a body destroyed outright (Jettison takes the unconscious too, without killing them). A profile's living
+		// character dies first, the usual way; the death record is kept here, as the body that held it is gone; and
+		// the client drops the body too (people's removal isn't sent otherwise).
+		private static void DestroyBodyPrefix(CondOwner coToDestroy)
+		{
+			CondOwner co = coToDestroy;
+			if (co == null || co.bDestroyed || Plugin.Net.CurrentMode == NetSession.Mode.Client)
+			{
+				return;
+			}
+			if (co.bAlive && Profile.OwnerOf(co) != null)
+			{
+				Plugin.Log.LogInfo("Death: " + co.strName + " is being destroyed (jettisoned?) alive");
+				try
+				{
+					co.Kill = true;
+				}
+				catch (Exception e)
+				{
+					Plugin.Log.LogError("Death: killing " + co.strName + " before destruction: " + e);
+				}
+			}
+			Dictionary<string, string> rec;
+			if (co.mapGUIPropMaps == null || !co.mapGUIPropMaps.TryGetValue(Gpm, out rec) || rec == null)
+			{
+				return;
+			}
+			Destroyed[co.strID] = rec;
+			if (Plugin.Net.CurrentMode == NetSession.Mode.Host && Plugin.Net.Connected)
+			{
+				Plugin.Net.Send("GONE " + co.strID);
+			}
 		}
 
 		// ---- Death ------------------------------------------------------------------------------------------------
@@ -195,6 +233,10 @@ namespace OstranautsMP
 					continue;
 				}
 				Consider(rec, co.strID, profileId, ref best, ref bestT, ref bodyName);
+			}
+			foreach (KeyValuePair<string, Dictionary<string, string>> kv in Destroyed)
+			{
+				Consider(kv.Value, kv.Key, profileId, ref best, ref bestT, ref bodyName);
 			}
 			if (CrewSim.system != null && CrewSim.system.dictShips != null)
 			{
@@ -397,6 +439,13 @@ namespace OstranautsMP
 
 		private static void ClientDied(string id)
 		{
+			// Told again about the same body (the host repeats DIED when it makes the new body): already handled; going
+			// on would drop "Waiting for host..." and let New body be pressed again.
+			if (ClientDead && id != null && id == _deadName)
+			{
+				Plugin.Log.LogInfo("Death: " + id + " died (already known)");
+				return;
+			}
 			CondOwner co;
 			if (id != null && DataHandler.mapCOs.TryGetValue(id, out co) && co != null && !co.bDestroyed && co.bAlive)
 			{
@@ -411,11 +460,7 @@ namespace OstranautsMP
 				}
 			}
 			CrewClaim.ClientLost();
-			// Told again (a new body asked for from the pick window, or a denied one): keep what was typed.
-			if (!ClientDead || _deadName != id)
-			{
-				_newName = NextName(id);
-			}
+			_newName = NextName(id);
 			ClientDead = true;
 			_deadName = id;
 			_askedName = null;

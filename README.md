@@ -18,6 +18,8 @@ Not been tested on more recent builds.
 ## Features
 
 ### Connection & session
+* Host and client must have the same mod version: with different ones the connection is dropped and both are told which versions.
+* If the connection is lost in the game (a crash, leaving, a timeout), both players are told and the game is paused on both.
 * Host / Join from a **MULTIPLAYER** button on the main menu console, with a menu-styled window.
 * Remembers your player name, the last IP and the port.
 * The host's save is sent to the client automatically on load; a client can **join mid-game** (the host pauses, autosaves and sends the save).

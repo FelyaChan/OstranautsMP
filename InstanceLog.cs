@@ -85,7 +85,9 @@ namespace OstranautsMP
 				}
 				_stream = fs;
 				_writer = new StreamWriter(fs, new UTF8Encoding(false));
-				_writer.AutoFlush = true;
+				// Not flushed per line (the whole Unity log comes through here): Plugin flushes once a second, errors and
+				// crashes go out at once.
+				_writer.AutoFlush = false;
 				FilePath = path;
 				return true;
 			}
@@ -112,15 +114,8 @@ namespace OstranautsMP
 
 		public void LogMemory()
 		{
-			try
-			{
-				Process p = Process.GetCurrentProcess();
-				Write("[Memory] private " + Mb(p.PrivateMemorySize64) + " MB, working set " + Mb(p.WorkingSet64) + " MB, managed " + Mb(GC.GetTotalMemory(false)) + " MB");
-			}
-			catch (Exception e)
-			{
-				Write("[Memory] unavailable: " + e.Message);
-			}
+			// Managed heap only: the process figures (private bytes, working set) always read 0 under Unity.
+			Write("[Memory] managed " + Mb(GC.GetTotalMemory(false)) + " MB");
 		}
 
 		// BepInEx sources. Unity messages arrive here too (UnityLogListening), but OnUnityLog writes them with stack traces.
@@ -131,6 +126,27 @@ namespace OstranautsMP
 				return;
 			}
 			Write("[" + eventArgs.Level + " " + eventArgs.Source.SourceName + "] " + eventArgs.Data);
+			if ((eventArgs.Level & (LogLevel.Error | LogLevel.Fatal)) != 0)
+			{
+				Flush();
+			}
+		}
+
+		public void Flush()
+		{
+			lock (_lock)
+			{
+				try
+				{
+					if (_writer != null)
+					{
+						_writer.Flush();
+					}
+				}
+				catch
+				{
+				}
+			}
 		}
 
 		private void OnUnityLog(string message, string stackTrace, LogType type)
@@ -143,6 +159,10 @@ namespace OstranautsMP
 			{
 				Write("[Unity " + type + "] " + message);
 			}
+			if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
+			{
+				Flush();
+			}
 		}
 
 		private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -154,6 +174,7 @@ namespace OstranautsMP
 		private void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
 		{
 			Write("[Unhandled] " + e.ExceptionObject);
+			Flush();
 		}
 
 		public void Dispose()

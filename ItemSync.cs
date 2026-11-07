@@ -282,6 +282,12 @@ namespace OstranautsMP
 					{
 						Plugin.Net.Send("ITEM " + location + "|" + Entries(head));
 					}
+					else if (Plugin.Net.CurrentMode == NetSession.Mode.Host)
+					{
+						// Gone somewhere we don't sync (into a placeholder being installed, a trade screen): the client
+						// must at least take it out of where it was (a hand, a slot), or it stays there for good.
+						Plugin.Net.Send("ITEM O|" + Entries(head));
+					}
 				}
 				catch (Exception e)
 				{
@@ -638,6 +644,7 @@ namespace OstranautsMP
 				group = new List<CondOwner>();
 			}
 			HashSet<string> ours = new HashSet<string>();
+			StringBuilder which = new StringBuilder();
 			int missing = 0;
 			int moved = 0;
 			int extra = 0;
@@ -650,11 +657,13 @@ namespace OstranautsMP
 					Dirty[co.strID] = co;
 					Fresh.Add(co.strID);
 					missing++;
+					Which(which, "missing", co, Signature(co), null);
 				}
 				else if (place != Signature(co))
 				{
 					Dirty[co.strID] = co;
 					moved++;
+					Which(which, "misplaced", co, Signature(co), place);
 				}
 			}
 			foreach (string id in theirs.Keys)
@@ -669,16 +678,36 @@ namespace OstranautsMP
 					// We have it, just somewhere else: send where.
 					Dirty[id] = co;
 					moved++;
+					Which(which, "elsewhere", co, Signature(co), theirs[id]);
 				}
 				else
 				{
 					Plugin.Net.Send("GONE " + id);
 					extra++;
+					Which(which, "extra", null, null, theirs[id], id);
 				}
 			}
-			Plugin.Log.LogWarning("Client desync in " + key + ": " + missing + " missing, " + moved + " misplaced, " + extra + " extra");
+			Plugin.Log.LogWarning("Client desync in " + key + ": " + missing + " missing, " + moved + " misplaced, " + extra + " extra" + which);
 			_notice = "DESYNC: client resynced " + key + " (" + (missing + moved + extra) + " items)";
 			_noticeUntil = Time.unscaledTime + 10f;
+		}
+
+		// For the resync log: the first few items, with their kind and place here / on the client.
+		private static void Which(StringBuilder sb, string what, CondOwner co, string here, string there, string id = null)
+		{
+			if (sb.Length > 600)
+			{
+				return;
+			}
+			sb.Append("\n  ").Append(what).Append(' ').Append(co != null ? co.strCODef + " " + co.strID : id);
+			if (here != null)
+			{
+				sb.Append(" host:").Append(here);
+			}
+			if (there != null)
+			{
+				sb.Append(" client:").Append(there);
+			}
 		}
 
 		// All items on the loaded ships, grouped.
@@ -734,6 +763,9 @@ namespace OstranautsMP
 			}
 			return "S~" + ship.strRegID;
 		}
+
+		// Client: items the host put somewhere we don't sync (O), hidden here until they come back.
+		private static readonly HashSet<string> OutOfSight = new HashSet<string>();
 
 		// Where an item is, coarse enough to match on both machines (floor position to half a tile).
 		private static string Signature(CondOwner co)
@@ -815,6 +847,12 @@ namespace OstranautsMP
 						return true;
 					}
 					break;
+				case "O":
+					if (f.Length != 2 || Plugin.Net.CurrentMode != NetSession.Mode.Client)
+					{
+						return true;
+					}
+					break;
 				case "S":
 				case "C":
 					if ((f[0] == "S" && f.Length != 4) || (f[0] == "C" && f.Length != 5))
@@ -864,8 +902,16 @@ namespace OstranautsMP
 			}
 			Unstack(head);
 			head.RemoveFromCurrentHome();
+			if (OutOfSight.Remove(head.strID))
+			{
+				head.Visible = true;
+			}
 			switch (f[0])
 			{
+				case "O":
+					head.Visible = false;
+					OutOfSight.Add(head.strID);
+					break;
 				case "F":
 				{
 					float x = float.Parse(f[2], NumberStyles.Float, Inv);
@@ -1004,7 +1050,10 @@ namespace OstranautsMP
 				}
 				// Turned into another kind on the other side (CondOwner.ModeSwitch): ours is the old kind, with the old
 				// kind's actions. Rebuild it from the save.
-				Plugin.Log.LogInfo("Item " + save.strID + " changed from " + co.strCODef + " to " + save.strCODef);
+				if (!co.strCODef.StartsWith("ItmDoor", StringComparison.Ordinal))
+				{
+					Plugin.Log.LogInfo("Item " + save.strID + " changed from " + co.strCODef + " to " + save.strCODef);
+				}
 				Unstack(co);
 				co.RemoveFromCurrentHome(bForce: true);
 				co.Destroy();
@@ -1187,6 +1236,8 @@ namespace OstranautsMP
 				}
 				case "S":
 					return co.objCOParent == parent && co.slotNow != null && co.slotNow.strName == f[2];
+				case "O":
+					return co.objCOParent == null && co.ship == null && OutOfSight.Contains(co.strID);
 				case "C":
 					return co.objCOParent == parent && co.slotNow == null && co.pairInventoryXY.x == int.Parse(f[2], Inv) && co.pairInventoryXY.y == int.Parse(f[3], Inv);
 				default:
