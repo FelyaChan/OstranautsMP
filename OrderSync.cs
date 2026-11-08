@@ -28,7 +28,12 @@ namespace OstranautsMP
 	// A direct order from the client (not task work: the work manager retries those its own way, nor the AI's own
 	// actions) that the host's copy drops without doing it (the game's re-check on arrival fails, the target can't be
 	// reached, it's cancelled) is dropped on the client too, and the reason the game gave goes to the client
-	// character's log.
+	// character's log. So does any message the game writes there as the host runs a client action (a repair that's
+	// missing parts, a task that can't be claimed): the client's own copy of those is hidden as a prediction.
+	//
+	// Looking into a container (Inventory and the like: only opens the inventory screen) is for the player only in
+	// the game's data, which the host checks against its own selected character. On the host the client's copy has
+	// that check and the screen opening removed: the screen opens on the client, the host only walks there.
 	//
 	// Inventory screen: it moves items directly, not through orders. Those moves are relayed by ItemSync while
 	// InUserInput is true; the inventory UI methods are part of the input scope for that reason.
@@ -38,6 +43,7 @@ namespace OstranautsMP
 	//   PROCESS <us>|<target>|<interaction>
 	// Protocol (host -> client):
 	//   IADROP <us>|<interaction>|<target>|<cancelling 0|1>|<base64 reason>
+	//   IAMSG <us>|<base64 message>
 	public static class OrderSync
 	{
 		private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -74,6 +80,11 @@ namespace OstranautsMP
 
 		// Client: a message from the host is being written to the character's log; let it through.
 		private static bool _hostMessage;
+
+		// Client: the last "Bad" line shown in our character's log, so the host's copy of it isn't shown twice.
+		private static string _lastShown;
+
+		private static float _lastShownTime;
 
 		// Not followed: the game keeps replacing these, and they leave nothing behind.
 		private static readonly HashSet<string> NotDropped = new HashSet<string> { "Walk", "Wait", "QuickWait" };
@@ -277,7 +288,42 @@ namespace OstranautsMP
 				_cantReach = DataHandler.GetString("ERROR_CANT_REACH_DEST");
 			}
 			bool prediction = (!string.IsNullOrEmpty(_cantDo) && strMsg.StartsWith(_cantDo, StringComparison.Ordinal)) || (!string.IsNullOrEmpty(_cantReach) && strMsg.StartsWith(_cantReach, StringComparison.Ordinal));
+			if (!prediction)
+			{
+				_lastShown = strMsg;
+				_lastShownTime = Time.unscaledTime;
+			}
 			return !prediction;
+		}
+
+		// Client: a "Bad" line from the host into our character's log, unless it was just shown.
+		private static void ShowHostMessage(CondOwner mine, string text)
+		{
+			if (text.Length == 0 || (text == _lastShown && Time.unscaledTime - _lastShownTime < 3f))
+			{
+				return;
+			}
+			_lastShown = text;
+			_lastShownTime = Time.unscaledTime;
+			_hostMessage = true;
+			try
+			{
+				mine.LogMessage(text, "Bad", mine.strName);
+			}
+			finally
+			{
+				_hostMessage = false;
+			}
+		}
+
+		// Host: the client's character only views the target's contents with this; see the top.
+		private static void ForHost(Interaction ia)
+		{
+			if (ia != null && ia.strRaiseUI == "Inventory" && ia.strRaiseUIThem == null)
+			{
+				ia.bHumanOnly = false;
+				ia.strRaiseUI = null;
+			}
 		}
 
 		private static void LogMessagePostfix(CondOwner __instance, string strMsg, string strColor)
@@ -286,6 +332,10 @@ namespace OstranautsMP
 			{
 				_lastBad = strMsg;
 				_lastBadFrame = Time.frameCount;
+				if (HostRelaying && !string.IsNullOrEmpty(strMsg))
+				{
+					Plugin.Net.Send("IAMSG " + __instance.strID + "|" + Convert.ToBase64String(Encoding.UTF8.GetBytes(strMsg)));
+				}
 			}
 		}
 
@@ -341,24 +391,35 @@ namespace OstranautsMP
 			}
 			mine.ClearInteraction(found, f[3] == "1");
 			// Only direct orders come here (task work retries its own way), so the host's reason is the real one.
-			if (reason.Length > 0)
-			{
-				_hostMessage = true;
-				try
-				{
-					mine.LogMessage(reason, "Bad", mine.strName);
-				}
-				finally
-				{
-					_hostMessage = false;
-				}
-			}
+			ShowHostMessage(mine, reason);
 			Plugin.Log.LogInfo("Host dropped " + f[1] + ((reason.Length > 0) ? (": " + reason) : ""));
 		}
 
 		// Main thread. Returns false if the message isn't ours.
 		public static bool OnMessage(string cmd, string arg)
 		{
+			if (cmd == "IAMSG")
+			{
+				if (Plugin.Net.CurrentMode == NetSession.Mode.Client && WorldSync.InGame)
+				{
+					try
+					{
+						string[] f = arg.Split('|');
+						CondOwner mine = CrewClaim.ClientMine;
+						if (f.Length == 2 && mine != null && mine.strID == f[0])
+						{
+							string text = Encoding.UTF8.GetString(Convert.FromBase64String(f[1]));
+							ShowHostMessage(mine, text);
+							Plugin.Log.LogInfo("Host message: " + text);
+						}
+					}
+					catch (Exception e)
+					{
+						Plugin.Log.LogError("IAMSG failed: " + e);
+					}
+				}
+				return true;
+			}
 			if (cmd == "IADROP")
 			{
 				if (Plugin.Net.CurrentMode == NetSession.Mode.Client)
@@ -447,31 +508,33 @@ namespace OstranautsMP
 			}
 			ia.objUs = us;
 			ia.objThem = them;
+			ForHost(ia);
 			Plugin.Log.LogInfo("Action received: " + us.strName + " " + f[2]);
-			// Resume/cancel task are menu wrappers: the game doesn't check their own conditions, so neither do we.
-			if (them != null && f[2] != "ACTResumeTaskThem" && f[2] != "ACTCancelTaskThem")
-			{
-				// Same check the menu makes; log why it fails here, the game only tells the character's message log.
-				bool chanceSkip = CondTrigger.bChanceSkip;
-				CondTrigger.bChanceSkip = true;
-				// Verbose: otherwise the game only records "Unable to comply", not which of us / them / room / items failed.
-				bool verbose = ia.bVerboseTrigger;
-				ia.bVerboseTrigger = true;
-				bool ok = ia.Triggered(us, them);
-				ia.bVerboseTrigger = verbose;
-				CondTrigger.bChanceSkip = chanceSkip;
-				if (!ok)
-				{
-					Plugin.Log.LogWarning("Client action fails on host: " + us.strName + " " + f[2] + ": " + ia.FailReasons(bUsThem: true, bItems: true, bDebug: true));
-				}
-			}
-			// ProcessInteraction uses the selected crew (manual AI mode, quick bar); select the client's character for the call.
+			// ProcessInteraction uses the selected crew (manual AI mode, quick bar); select the client's character for the
+			// call, and for the check before it (player-only actions check the selected crew).
 			List<CondOwner> selection = new List<CondOwner>(CrewSim.aSelected);
 			CrewSim.aSelected.Clear();
 			CrewSim.aSelected.Add(us);
-			HostRelaying = true;
 			try
 			{
+				// Resume/cancel task are menu wrappers: the game doesn't check their own conditions, so neither do we.
+				if (them != null && f[2] != "ACTResumeTaskThem" && f[2] != "ACTCancelTaskThem")
+				{
+					// Same check the menu makes; log why it fails here, the game only tells the character's message log.
+					bool chanceSkip = CondTrigger.bChanceSkip;
+					CondTrigger.bChanceSkip = true;
+					// Verbose: otherwise the game only records "Unable to comply", not which of us / them / room / items failed.
+					bool verbose = ia.bVerboseTrigger;
+					ia.bVerboseTrigger = true;
+					bool ok = ia.Triggered(us, them);
+					ia.bVerboseTrigger = verbose;
+					CondTrigger.bChanceSkip = chanceSkip;
+					if (!ok)
+					{
+						Plugin.Log.LogWarning("Client action fails on host: " + us.strName + " " + f[2] + ": " + ia.FailReasons(bUsThem: true, bItems: true, bDebug: true));
+					}
+				}
+				HostRelaying = true;
 				RadialContextMenuObject.ProcessInteraction(ia);
 			}
 			finally
@@ -515,6 +578,7 @@ namespace OstranautsMP
 				}
 				ia.objUs = us;
 				ia.objThem = them;
+				ForHost(ia);
 				// Same check the radial menu runs before ordering.
 				bool chanceSkip = CondTrigger.bChanceSkip;
 				CondTrigger.bChanceSkip = true;

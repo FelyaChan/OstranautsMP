@@ -11,9 +11,10 @@ namespace OstranautsMP
 	// Chat between the two players, "joined / left / timed out" notices, speech bubbles and map pings.
 	//
 	// Two kinds of messages:
-	// - Speech: Enter in the game opens a one-line field (quick chat). What's typed is said by your character: a bubble,
-	//   typed out like a typewriter as "Name: text" over them, then gone after a few seconds (if the character is off
-	//   screen, the bubble sits at the screen edge with a tail pointing at them). It isn't kept anywhere.
+	// - Speech: Enter in the game opens a one-line field (quick chat). What's typed is said by your character: a line on
+	//   their speech plate over them (their name on top, up to 3 lines), typed out like a typewriter, then gone after a
+	//   few seconds (if the character is off screen, the plate sits at the screen edge with a tail pointing at them). It
+	//   isn't kept anywhere.
 	// - PDA messages: "/pda text" in the quick chat (or PDA mode: "/pda" alone switches the quick chat to it and back),
 	//   and everything typed in the main menu chat window. These are records in the "CHAT" app on the PDA (PdaChat):
 	//   the sender's avatar and colour, the in-game time, the text; each can be deleted, or the whole chat. They are kept
@@ -24,7 +25,11 @@ namespace OstranautsMP
 	// Names in bubbles and pings are coloured by how the speaker's character is doing: green (fine) to red (bad),
 	// from the worst condition they show (the game's own Good / Badish / Bad / BadVery colour classes).
 	//
-	// Protocol: NAME <name>; SAY <characterID>|<epoch>|<text> (speech); CHAT <message ID>|<profile ID>|<epoch>|<colour
+	// Speech is voiced as it's typed out (ChatVoice), in the speaker's voice from their profile: pitch and speed (the
+// speed also sets how fast their bubble types). While a player types in the quick chat, a "..." shows over their
+// character for both players.
+//
+// Protocol: NAME <name>; SAY <characterID>|<epoch>|<pitch>,<speed>,<0 out loud|1 radio|2 unheard>|<text> (speech); TYPING <characterID>|<0|1>; CHAT <message ID>|<profile ID>|<epoch>|<colour
 	// hex>|<name>|<text> (a PDA message; epoch empty when not in game);
 	// MARK <x>|<y>|<characterID>|<base64 label>|<colour hex>|<target person ID>. The ping sits where the mouse was; if
 	// that was over an item, it names it. Over a person, it names them and rings them, following them while it lasts. Each player picks their ping colour in the Multiplayer window.
@@ -38,13 +43,28 @@ namespace OstranautsMP
 		// How long a bubble stays after it's fully typed.
 		private const float BubbleSeconds = 5f;
 
-		// Bubbles one speaker can have at once (older ones above the newest).
+		// Lines one speaker can have at once (older ones above the newest).
 		private const int MaxBubbles = 3;
 
-		// Where each bubble is drawn above its speaker (pixels up), easing towards its place in the stack.
-		private static readonly Dictionary<string, float> BubbleLift = new Dictionary<string, float>();
+		// Each speaker's plate height on screen (pixels), easing towards its content's.
+		private static readonly Dictionary<string, float> PlateHeight = new Dictionary<string, float>();
 
-		private const float TypeCharsPerSecond = 30f;
+		internal const float TypeCharsPerSecond = 30f;
+
+		// The name in front of a bubble's text types out almost at once; the text at the speaker's speed.
+		private const float NameCharsPerSecond = 400f;
+
+		// How many characters of "Name: text" are typed out by now; prefix is the name and separator.
+		private static int Typed(Bubble b, int prefix, float now)
+		{
+			float t = now - b.Start;
+			float nameTime = prefix / NameCharsPerSecond;
+			if (t < nameTime)
+			{
+				return Mathf.FloorToInt(t * NameCharsPerSecond);
+			}
+			return prefix + Mathf.FloorToInt((t - nameTime) * TypeCharsPerSecond * b.Speed);
+		}
 
 		private const float MarkSeconds = 8f;
 
@@ -88,7 +108,32 @@ namespace OstranautsMP
 			public float Start;
 
 			public float Until;
+
+			// The speaker's voice: semitones, and how fast the bubble types (1 = normal).
+			public float Pitch;
+
+			public float Speed;
+
+			// Said over the suit radio (helmet on, suit battery charged): heard anywhere, shown and voiced as radio.
+			public bool Radio;
+
+			// Said into a helmet with no power, or with no air around: nobody hears it; who can see the speaker sees
+			// their lips move (the letters as dots), with no sound.
+			public bool Muted;
 		}
+
+		// Bubbles' letters already voiced, by bubble (character ID | start).
+		private static readonly Dictionary<string, int> Voiced = new Dictionary<string, int>();
+
+		private static readonly List<string> VoicedGone = new List<string>();
+
+		// People typing in the quick chat now (ours too), by character ID: since when.
+		private static readonly Dictionary<string, float> Typing = new Dictionary<string, float>();
+
+		// What we last told the other player about our typing, and as whom.
+		private static bool _sentTyping;
+
+		private static string _sentTypingId;
 
 		private struct Mark
 		{
@@ -169,7 +214,10 @@ namespace OstranautsMP
 
 		private static GUIStyle _markStyle;
 
-		private static GUIStyle _speechStyle;
+		// The speech plate: the speaker's name on top, their lines under it.
+		private static GUIStyle _plateName;
+
+		private static GUIStyle _plateText;
 
 		public static void Patch(Harmony harmony)
 		{
@@ -193,6 +241,8 @@ namespace OstranautsMP
 			AddSystem(((PeerName != null) ? PeerName : "Player") + " " + reason);
 			PeerName = null;
 			_peerAnnounced = false;
+			Typing.Clear();
+			_sentTyping = false;
 		}
 
 		// Main thread. Returns false if the message isn't ours.
@@ -217,10 +267,59 @@ namespace OstranautsMP
 				}
 				case "SAY":
 				{
-					string[] f = arg.Split(new char[] { '|' }, 3);
-					if (f.Length == 3)
+					string[] f = arg.Split(new char[] { '|' }, 4);
+					if (f.Length == 4)
 					{
-						AddSpeech(f[0], (PeerName != null) ? PeerName : "Player", f[2]);
+						float pitch = 0f;
+						float speed = 1f;
+						string[] v = f[2].Split(',');
+						if (v.Length >= 2)
+						{
+							float.TryParse(v[0], NumberStyles.Float, Inv, out pitch);
+							float.TryParse(v[1], NumberStyles.Float, Inv, out speed);
+						}
+						int mode = ModeLoud;
+						if (v.Length >= 3)
+						{
+							int.TryParse(v[2], NumberStyles.Integer, Inv, out mode);
+						}
+						Typing.Remove(f[0]);
+						CondOwner speaker;
+						DataHandler.mapCOs.TryGetValue(f[0], out speaker);
+						string said = f[3];
+						if (mode == ModeRadio)
+						{
+							float q = RadioQuality(speaker);
+							DrainRadio(speaker);
+							if (q > 0f)
+							{
+								// Static on the words only, so "/me" still reads as an action.
+								string rest;
+								int seed = said.GetHashCode() ^ f[0].GetHashCode();
+								said = IsAction(said, out rest) ? ("/me " + Static(rest, q, seed)) : Static(said, q, seed);
+								AddSpeech(f[0], (PeerName != null) ? PeerName : "Player", said, pitch, speed, mode);
+							}
+						}
+						else if (HearsOutLoud(speaker))
+						{
+							AddSpeech(f[0], (PeerName != null) ? PeerName : "Player", said, pitch, speed, mode);
+						}
+					}
+					return true;
+				}
+				case "TYPING":
+				{
+					string[] f = arg.Split('|');
+					if (f.Length == 2 && f[0].Length > 0)
+					{
+						if (f[1] == "1")
+						{
+							Typing[f[0]] = Time.unscaledTime;
+						}
+						else
+						{
+							Typing.Remove(f[0]);
+						}
 					}
 					return true;
 				}
@@ -242,6 +341,17 @@ namespace OstranautsMP
 					bool action = IsAction(f[5], out rest);
 					Color color;
 					PdaNotify.Show(f[1], name, action ? rest : f[5], ColorUtility.TryParseHtmlString("#" + f[3], out color) ? color : Color.white, action);
+					// The PDA's message sound, wherever the chat is read (open or not, in the menus too).
+					try
+					{
+						if (AudioManager.am != null)
+						{
+							AudioManager.am.PlayAudioEmitter("UIMessageLogSocial", bLoop: false);
+						}
+					}
+					catch
+					{
+					}
 					return true;
 				}
 				case "MARK":
@@ -275,6 +385,12 @@ namespace OstranautsMP
 				default:
 					return false;
 			}
+		}
+
+		// The PDA's CHAT app: always a PDA message.
+		internal static void SendPda(string raw)
+		{
+			Send(raw, true);
 		}
 
 		// Main menu chat window: always a PDA message. Quick chat: speech, unless "/pda ..." or PDA mode.
@@ -317,6 +433,11 @@ namespace OstranautsMP
 			CondOwner me = MyCharacter();
 			double epoch = WorldSync.InGame ? StarSystem.fEpoch : double.NaN;
 			string id = (me != null) ? me.strID : "";
+			int mode = (me != null) ? SpeechMode(me) : ModeLoud;
+			if (mode == ModeRadio && !toPda)
+			{
+				DrainRadio(me);
+			}
 			if (!toPda && me == null)
 			{
 				// Nobody to say it: it goes to the PDA instead.
@@ -333,7 +454,7 @@ namespace OstranautsMP
 				}
 				else
 				{
-					Plugin.Net.Send("SAY " + id + "|" + (double.IsNaN(epoch) ? "" : epoch.ToString("R", Inv)) + "|" + text);
+					Plugin.Net.Send("SAY " + id + "|" + (double.IsNaN(epoch) ? "" : epoch.ToString("R", Inv)) + "|" + Profile.VoicePitch.ToString("R", Inv) + "," + Profile.VoiceSpeed.ToString("R", Inv) + "," + mode.ToString(Inv) + "|" + text);
 				}
 			}
 			else if (Plugin.Net.CurrentMode == NetSession.Mode.None)
@@ -346,7 +467,7 @@ namespace OstranautsMP
 			}
 			else
 			{
-				AddSpeech(id, Plugin.PlayerName, text);
+				AddSpeech(id, Plugin.PlayerName, text, Profile.VoicePitch, Profile.VoiceSpeed, mode);
 			}
 		}
 
@@ -358,16 +479,200 @@ namespace OstranautsMP
 		}
 
 		// Speech: a bubble over the character, kept nowhere. "/me ..." is an action.
-		private static void AddSpeech(string characterId, string player, string text)
+		private static void AddSpeech(string characterId, string player, string text, float pitch, float speed, int mode)
 		{
 			string speaker = SpeakerName(characterId, player);
 			string rest;
 			if (IsAction(text, out rest))
 			{
-				AddBubble(characterId, speaker, rest, action: true);
+				AddBubble(characterId, speaker, rest, pitch, speed, mode, action: true);
 				return;
 			}
-			AddBubble(characterId, speaker, text);
+			AddBubble(characterId, speaker, text, pitch, speed, mode);
+		}
+
+		// ---- Who hears what ----
+		// Over the suit radio (helmet on, a charged battery in the suit): everyone, anywhere. Out loud: only someone in
+		// the same room as the speaker, or who can see them (the game's own line of sight: walls and closed doors block
+		// it, an open door doesn't). Into a helmet without power, or out loud with no air around (below NoAirKPa):
+		// nobody; those who'd hear it out loud see the lips move. The speaker's side decides which and says so with
+		// the line.
+
+		private const int ModeLoud = 0;
+
+		private const int ModeRadio = 1;
+
+		private const int ModeMuted = 2;
+
+		private const double NoAirKPa = 10.0;
+
+		private static int SpeechMode(CondOwner co)
+		{
+			if (OnRadio(co))
+			{
+				return ModeRadio;
+			}
+			if (co.HasCond("IsEVAHUD") || co.HasCond("IsPSHUD"))
+			{
+				return ModeMuted;
+			}
+			// The game's own idea of their room first: a door tile may be in none.
+			Room room = co.currentRoom;
+			if (room == null && co.ship != null && co.tf != null)
+			{
+				room = co.ship.GetRoomAtWorldCoords1(co.tf.position, bAllowDocked: true);
+			}
+			if (room == null || room.CO == null || room.CO.GetCondAmount("StatGasPressure") < NoAirKPa)
+			{
+				return ModeMuted;
+			}
+			return ModeLoud;
+		}
+
+		private static CondTrigger _ctSuitOn;
+
+		private static CondTrigger _ctSuitBattery;
+
+		internal static bool OnRadio(CondOwner co)
+		{
+			return SuitBattery(co) != null;
+		}
+
+		// The charged battery in the suit of someone with their helmet on, or null.
+		private static CondOwner SuitBattery(CondOwner co)
+		{
+			if (co == null || co.compSlots == null || !co.HasCond("IsEVAHUD"))
+			{
+				return null;
+			}
+			if (_ctSuitOn == null)
+			{
+				_ctSuitOn = DataHandler.GetCondTrigger("TIsEVAOn");
+				_ctSuitBattery = DataHandler.GetCondTrigger("TIsFitContainerEVABattery");
+			}
+			if (_ctSuitOn == null || _ctSuitBattery == null)
+			{
+				return null;
+			}
+			foreach (CondOwner suit in co.compSlots.GetCOs("shirt_out", bAllowLocked: false, _ctSuitOn))
+			{
+				List<CondOwner> inside = suit.GetCOs(bAllowLocked: false);
+				if (inside == null)
+				{
+					continue;
+				}
+				foreach (CondOwner item in inside)
+				{
+					if (_ctSuitBattery.Triggered(item, null, logOutcome: false) && item.GetCondAmount("StatPower") > 0.0)
+					{
+						return item;
+					}
+				}
+			}
+			return null;
+		}
+
+		// ---- Radio signal ----
+		// Each line over the radio takes RadioDrain of the speaker's suit battery (each side takes it from its own copy
+		// of the battery, so both stay alike). How clear a line reaches a listener (1 = clear, 0 = nothing): the
+		// speaker's battery below half charge, the distance (clear within RadioClearRange tiles, gone at RadioMaxRange:
+		// two or three rooms), and one of the two inside a ship's room while the other is out of one (the hull). An
+		// unclear line has some of its letters lost to static ("~", a crackle when it's typed out).
+
+		private const double RadioDrain = 0.01;
+
+		private const float RadioClearRange = 12f;
+
+		private const float RadioMaxRange = 24f;
+
+		private const float RadioHullFactor = 0.6f;
+
+		private static double MaxPower(CondOwner battery)
+		{
+			Powered p = battery.GetComponent<Powered>();
+			double max = (p != null) ? p.PowerStoredMax : battery.GetCondAmount("StatPowerMax");
+			return (max > 0.0) ? max : 1.0;
+		}
+
+		private static void DrainRadio(CondOwner speaker)
+		{
+			CondOwner battery = SuitBattery(speaker);
+			if (battery == null)
+			{
+				return;
+			}
+			double take = Math.Min(battery.GetCondAmount("StatPower"), MaxPower(battery) * RadioDrain);
+			battery.AddCondAmount("StatPower", 0.0 - take);
+		}
+
+		private static bool InRoom(CondOwner co)
+		{
+			return co.ship != null && co.tf != null && co.ship.GetRoomAtWorldCoords1(co.tf.position, bAllowDocked: true) != null;
+		}
+
+		private static float RadioQuality(CondOwner speaker)
+		{
+			CondOwner me = MyCharacter();
+			if (me == null || speaker == null || me == speaker)
+			{
+				return 1f;
+			}
+			if (me.tf == null || speaker.tf == null)
+			{
+				return 0f;
+			}
+			float q = 1f;
+			CondOwner battery = SuitBattery(speaker);
+			if (battery != null)
+			{
+				q *= Mathf.Clamp01((float)(battery.GetCondAmount("StatPower") / MaxPower(battery)) * 2f);
+			}
+			float d = Vector2.Distance(me.tf.position, speaker.tf.position);
+			q *= 1f - Mathf.Clamp01((d - RadioClearRange) / (RadioMaxRange - RadioClearRange));
+			if (InRoom(me) != InRoom(speaker))
+			{
+				q *= RadioHullFactor;
+			}
+			return q;
+		}
+
+		// Letters lost to static, the same way for the same line.
+		private static string Static(string text, float quality, int seed)
+		{
+			if (quality >= 1f)
+			{
+				return text;
+			}
+			System.Random rng = new System.Random(seed);
+			char[] c = text.ToCharArray();
+			for (int i = 0; i < c.Length; i++)
+			{
+				if (!char.IsWhiteSpace(c[i]) && rng.NextDouble() > quality)
+				{
+					c[i] = '~';
+				}
+			}
+			return new string(c);
+		}
+
+		private static bool HearsOutLoud(CondOwner speaker)
+		{
+			CondOwner me = MyCharacter();
+			if (me == null || speaker == null || me == speaker)
+			{
+				return true;
+			}
+			if (me.ship == null || speaker.ship == null || me.tf == null || speaker.tf == null)
+			{
+				return false;
+			}
+			Room mine = me.ship.GetRoomAtWorldCoords1(me.tf.position, bAllowDocked: true);
+			Room theirs = speaker.ship.GetRoomAtWorldCoords1(speaker.tf.position, bAllowDocked: true);
+			if (mine != null && mine == theirs)
+			{
+				return true;
+			}
+			return Visibility.IsCondOwnerLOSVisible(me, speaker);
 		}
 
 		// A PDA message: into this player's profile's log (PdaLog), in the game and in the menus.
@@ -557,7 +862,7 @@ namespace OstranautsMP
 			return sb.ToString();
 		}
 
-		private static void AddBubble(string characterId, string name, string text, bool action = false)
+		private static void AddBubble(string characterId, string name, string text, float pitch, float speed, int mode, bool action = false)
 		{
 			if (string.IsNullOrEmpty(characterId))
 			{
@@ -578,7 +883,11 @@ namespace OstranautsMP
 			nb.Text = text;
 			nb.Action = action;
 			nb.Start = Time.unscaledTime;
-			nb.Until = nb.Start + (name.Length + 2 + text.Length) / TypeCharsPerSecond + BubbleSeconds;
+			nb.Pitch = Mathf.Clamp(pitch, Profile.MinPitch, Profile.MaxPitch);
+			nb.Speed = Mathf.Clamp((speed > 0f) ? speed : 1f, Profile.MinSpeed, Profile.MaxSpeed);
+			nb.Radio = mode == ModeRadio;
+			nb.Muted = mode == ModeMuted;
+			nb.Until = nb.Start + (name.Length + 2) / NameCharsPerSecond + text.Length / (TypeCharsPerSecond * nb.Speed) + BubbleSeconds;
 			Bubbles.Add(nb);
 		}
 
@@ -643,9 +952,13 @@ namespace OstranautsMP
 			{
 				DataHandler.mapCOs.TryGetValue(characterId, out co);
 			}
+			return ColorUtility.ToHtmlStringRGB(StateColor(co));
+		}
+
+		private static Color StateColor(CondOwner co)
+		{
 			float b = Badness(co);
-			Color c = (b < 0.5f) ? Color.Lerp(Fine, Uneasy, b * 2f) : Color.Lerp(Uneasy, Dire, (b - 0.5f) * 2f);
-			return ColorUtility.ToHtmlStringRGB(c);
+			return (b < 0.5f) ? Color.Lerp(Fine, Uneasy, b * 2f) : Color.Lerp(Uneasy, Dire, (b - 0.5f) * 2f);
 		}
 
 		// IMGUI rich text has no escaping; a zero-width space after '<' keeps player text from being read as a tag.
@@ -699,6 +1012,109 @@ namespace OstranautsMP
 		}
 
 		// ---- Drawing (IMGUI: main menu window, bubbles, pings) ---------------------------------------------------
+
+		// Voice the letters of each bubble's text as they're typed out: the newest one each frame (several in one frame
+		// would only click).
+		private static void UpdateVoice()
+		{
+			float now = Time.unscaledTime;
+			foreach (Bubble b in Bubbles)
+			{
+				string key = b.CharacterId + "|" + b.Start.ToString("R", Inv);
+				int prefix = b.Name.Length + (b.Action ? 1 : 2);
+				int t = Mathf.Min(b.Text.Length, Typed(b, prefix, now) - prefix);
+				int done;
+				if (!Voiced.TryGetValue(key, out done))
+				{
+					done = 0;
+				}
+				if (t > done && b.Muted)
+				{
+					Voiced[key] = t;
+				}
+				else if (t > done)
+				{
+					if (b.Radio && done == 0)
+					{
+						ChatVoice.RadioClick();
+					}
+					for (int i = t - 1; i >= done; i--)
+					{
+						if (b.Radio && b.Text[i] == '~')
+						{
+							ChatVoice.RadioClick();
+							break;
+						}
+						if (char.IsLetterOrDigit(b.Text[i]))
+						{
+							ChatVoice.Play(b.CharacterId, b.Text[i], b.Pitch, b.Radio);
+							break;
+						}
+					}
+					if (b.Radio && t >= b.Text.Length)
+					{
+						ChatVoice.RadioClick();
+					}
+					Voiced[key] = t;
+				}
+				else if (!Voiced.ContainsKey(key))
+				{
+					Voiced[key] = 0;
+				}
+			}
+			if (Voiced.Count > Bubbles.Count)
+			{
+				VoicedGone.Clear();
+				foreach (string key in Voiced.Keys)
+				{
+					bool alive = false;
+					foreach (Bubble b in Bubbles)
+					{
+						if (key == b.CharacterId + "|" + b.Start.ToString("R", Inv))
+						{
+							alive = true;
+							break;
+						}
+					}
+					if (!alive)
+					{
+						VoicedGone.Add(key);
+					}
+				}
+				foreach (string key in VoicedGone)
+				{
+					Voiced.Remove(key);
+				}
+			}
+		}
+
+		// Ours: typing while the quick chat has text in it. Shown here and sent on each change.
+		private static void UpdateTyping()
+		{
+			CondOwner me = MyCharacter();
+			string id = (me != null) ? me.strID : null;
+			bool typing = id != null && _quickOpen && _quickText.Trim().Length > 0;
+			if (_sentTypingId != null && (_sentTypingId != id || !typing))
+			{
+				Typing.Remove(_sentTypingId);
+				if (_sentTyping && Plugin.Net.Connected)
+				{
+					Plugin.Net.Send("TYPING " + _sentTypingId + "|0");
+				}
+				_sentTyping = false;
+				_sentTypingId = null;
+			}
+			if (typing)
+			{
+				Typing[id] = Time.unscaledTime;
+				if (!_sentTyping && Plugin.Net.Connected)
+				{
+					Plugin.Net.Send("TYPING " + id + "|1");
+					_sentTyping = true;
+				}
+				_sentTypingId = id;
+			}
+		}
 
 		// Called first in Plugin.OnGUI: the rects collected on the last Repaint become the ones to block.
 		public static void BeginGUI()
@@ -961,15 +1377,20 @@ namespace OstranautsMP
 				_bubbleStyle.normal.textColor = Color.white;
 				_bubbleStyle.richText = true;
 			}
-			if (_speechStyle == null)
+			if (_plateText == null)
 			{
-				_speechStyle = new GUIStyle(GUI.skin.box);
-				_speechStyle.wordWrap = true;
-				_speechStyle.richText = true;
-				_speechStyle.alignment = TextAnchor.UpperLeft;
-				_speechStyle.fontSize = 18;
-				_speechStyle.normal.textColor = Color.white;
-				_speechStyle.padding = new RectOffset(8, 8, 5, 5);
+				_plateText = new GUIStyle(GUI.skin.label);
+				_plateText.wordWrap = true;
+				_plateText.richText = true;
+				_plateText.alignment = TextAnchor.UpperLeft;
+				_plateText.fontSize = 18;
+				_plateText.normal.textColor = Color.white;
+				_plateText.padding = new RectOffset(0, 0, 0, 0);
+				_plateText.margin = new RectOffset(0, 0, 0, 0);
+				_plateName = new GUIStyle(_plateText);
+				_plateName.wordWrap = false;
+				_plateName.fontSize = 13;
+				_plateName.fontStyle = FontStyle.Bold;
 			}
 			if (_markStyle == null)
 			{
@@ -1012,72 +1433,93 @@ namespace OstranautsMP
 			return r;
 		}
 
+		// ---- Speech plates ----
+		// One plate per speaker, like a comms readout: a strip in the colour of how they're doing down the left, their
+		// name on top, their lines under it (oldest first, dimmer), each typed out and gone on its own timer; "..." as
+		// the last line while they type. The plate grows and shrinks from the top, the newest line stays by the speaker.
+
+		private const float PlateMaxWidth = 380f;
+
+		private const float PlateStripe = 3f;
+
+		private const float PlatePadX = 9f;
+
+		private const float PlatePadY = 5f;
+
+		private const float PlateLineGap = 3f;
+
+		private static readonly Color PlateBack = new Color(0.07f, 0.086f, 0.078f, 0.9f);
+
+		private static readonly Color PlateInk = new Color(0.9f, 0.93f, 0.89f);
+
+		// Text brightness by age: the newest line, the one before, older.
+		private static readonly float[] PlateDim = { 1f, 0.75f, 0.55f };
+
+		private static readonly Color RadioBack = new Color(0.05f, 0.07f, 0.09f, 0.9f);
+
+		private static readonly Color RadioTone = new Color(0.5f, 0.65f, 0.72f);
+
+		private static readonly Color RadioInk = new Color(0.81f, 0.87f, 0.89f);
+
+		private static readonly Color MutedInk = new Color(0.55f, 0.57f, 0.55f);
+
+		// What a muted line looks like to the others: a dot for each letter, the spaces kept.
+		private static string Lips(string text)
+		{
+			char[] c = text.ToCharArray();
+			for (int i = 0; i < c.Length; i++)
+			{
+				if (!char.IsWhiteSpace(c[i]))
+				{
+					c[i] = '\u00B7';
+				}
+			}
+			return new string(c);
+		}
+
 		private static void DrawBubbles()
 		{
-			Bubbles.RemoveAll((Bubble b) => Time.unscaledTime > b.Until);
+			float now = Time.unscaledTime;
+			Bubbles.RemoveAll((Bubble b) => now > b.Until);
 			Camera cam = GameCamera;
-			if (Bubbles.Count == 0 || cam == null)
+			if (cam == null || (Bubbles.Count == 0 && Typing.Count == 0))
 			{
+				PlateHeight.Clear();
 				return;
 			}
-			// Newest first, so each speaker's stack is built from the bottom up.
-			Dictionary<string, float> stackTop = new Dictionary<string, float>();
-			HashSet<string> alive = new HashSet<string>();
-			for (int bi = Bubbles.Count - 1; bi >= 0; bi--)
+			List<string> order = new List<string>();
+			Dictionary<string, List<Bubble>> by = new Dictionary<string, List<Bubble>>();
+			foreach (Bubble b in Bubbles)
 			{
-				Bubble b = Bubbles[bi];
-				CondOwner co;
-				if (!DataHandler.mapCOs.TryGetValue(b.CharacterId, out co) || co == null || co.bDestroyed || co.tf == null)
+				List<Bubble> list;
+				if (!by.TryGetValue(b.CharacterId, out list))
 				{
-					continue;
+					list = new List<Bubble>();
+					by[b.CharacterId] = list;
+					order.Add(b.CharacterId);
 				}
-				Vector2 target;
-				bool onScreen = ToScreen(cam, co.tf.position + new Vector3(0f, 0.9f, 0f), out target);
-				// Sized for the whole message, so the bubble doesn't grow while it's being typed.
-				string name = NoTags(b.Name);
-				string text = NoTags(b.Text);
-				string sep = b.Action ? " " : ": ";
-				GUIContent full = new GUIContent((b.Action ? "<i>" : "") + "<b>" + name + "</b>" + sep + text + (b.Action ? "</i>" : ""));
-				float w = Mathf.Min(380f, _speechStyle.CalcSize(full).x + 4f);
-				float h = _speechStyle.CalcHeight(full, w);
-				Rect r = onScreen ? new Rect(target.x - w / 2f, target.y - h - 6f, w, h) : EdgeRect(target, w, h, Color.white);
-				// Its place in the speaker's stack: above the newer ones; it slides up there.
-				float below;
-				stackTop.TryGetValue(b.CharacterId, out below);
-				stackTop[b.CharacterId] = below + h + 4f;
-				string key = b.CharacterId + "|" + b.Start.ToString("R", Inv);
-				alive.Add(key);
-				float lift;
-				lift = BubbleLift.TryGetValue(key, out lift) ? Mathf.Lerp(lift, below, Mathf.Clamp01(Time.unscaledDeltaTime * 10f)) : below;
-				BubbleLift[key] = lift;
-				r.y -= lift;
-				// The older ones fade over their last half second.
-				Color keepColor = GUI.color;
-				GUI.color = new Color(keepColor.r, keepColor.g, keepColor.b, keepColor.a * Mathf.Clamp01((b.Until - Time.unscaledTime) * 2f));
-				// Typewriter: the first n characters of "Name: text".
-				int n = Mathf.FloorToInt((Time.unscaledTime - b.Start) * TypeCharsPerSecond);
-				string shown;
-				string color = "<color=#" + StateColorHex(b.CharacterId) + "><b>";
-				if (n <= b.Name.Length)
+				list.Add(b);
+			}
+			foreach (string id in Typing.Keys)
+			{
+				if (!by.ContainsKey(id))
 				{
-					shown = color + NoTags(b.Name.Substring(0, Mathf.Max(0, n))) + "</b></color>";
+					by[id] = new List<Bubble>();
+					order.Add(id);
 				}
-				else
+			}
+			HashSet<string> alive = new HashSet<string>();
+			foreach (string id in order)
+			{
+				if (DrawPlate(cam, id, by[id], Typing.ContainsKey(id), now))
 				{
-					int t = Mathf.Min(b.Text.Length, n - b.Name.Length - sep.Length);
-					shown = color + name + "</b></color>" + sep.TrimEnd() + ((t >= 0) ? (" " + NoTags(b.Text.Substring(0, t))) : "");
+					alive.Add(id);
 				}
-				if (b.Action)
-				{
-					shown = "<i>" + shown + "</i>";
-				}
-				GUI.Box(r, shown, _speechStyle);
-				GUI.color = keepColor;
 			}
 			if (Event.current.type == EventType.Repaint)
 			{
 				List<string> gone = new List<string>();
-				foreach (string key in BubbleLift.Keys)
+				foreach (string key in PlateHeight.Keys)
 				{
 					if (!alive.Contains(key))
 					{
@@ -1086,9 +1528,168 @@ namespace OstranautsMP
 				}
 				foreach (string key in gone)
 				{
-					BubbleLift.Remove(key);
+					PlateHeight.Remove(key);
 				}
 			}
+		}
+
+		private static string LineText(Bubble b, string text)
+		{
+			return b.Action ? ("<i>" + text + "</i>") : text;
+		}
+
+		// Returns whether it was drawn.
+		private static bool DrawPlate(Camera cam, string id, List<Bubble> lines, bool typing, float now)
+		{
+			CondOwner co;
+			if (!DataHandler.mapCOs.TryGetValue(id, out co) || co == null || co.bDestroyed || co.tf == null)
+			{
+				return false;
+			}
+			Vector2 target;
+			bool onScreen = ToScreen(cam, co.tf.position + new Vector3(0f, 0.9f, 0f), out target);
+			// Only typing: shown over them when they're in sight, nowhere else.
+			if (lines.Count == 0 && (!onScreen || !co.Visible))
+			{
+				return false;
+			}
+			// Their typing shows only where they'd be heard.
+			bool radio = (lines.Count > 0) ? lines[lines.Count - 1].Radio : OnRadio(co);
+			if (typing && (radio ? RadioQuality(co) <= 0f : !HearsOutLoud(co)))
+			{
+				typing = false;
+			}
+			if (lines.Count == 0 && !typing)
+			{
+				return false;
+			}
+			string header = NoTags((lines.Count > 0) ? lines[lines.Count - 1].Name : SpeakerName(id, "Player")).ToUpperInvariant();
+			bool muted = lines.Count > 0 && lines[lines.Count - 1].Muted;
+			CondOwner me = MyCharacter();
+			bool mine = me != null && me == co;
+			if (radio)
+			{
+				header = "RADIO \u00B7 " + header;
+			}
+			else if (muted && mine)
+			{
+				header = header + " \u00B7 NOT HEARD";
+			}
+			GUIContent headerC = new GUIContent(header);
+			GUIContent dotsC = new GUIContent("...");
+			// Sized for every whole line, so the plate doesn't grow while a line is typed out.
+			float textW = _plateName.CalcSize(headerC).x;
+			GUIContent[] full = new GUIContent[lines.Count];
+			for (int i = 0; i < lines.Count; i++)
+			{
+				full[i] = new GUIContent(LineText(lines[i], NoTags(lines[i].Text)));
+				textW = Mathf.Max(textW, _plateText.CalcSize(full[i]).x);
+			}
+			if (typing)
+			{
+				textW = Mathf.Max(textW, _plateText.CalcSize(dotsC).x);
+			}
+			float w = Mathf.Min(PlateMaxWidth, textW + 2f + PlateStripe + 2f * PlatePadX);
+			float innerW = w - PlateStripe - 2f * PlatePadX;
+			float headerH = _plateName.CalcHeight(headerC, innerW);
+			float[] lineH = new float[lines.Count];
+			float total = 2f * PlatePadY + headerH;
+			for (int i = 0; i < lines.Count; i++)
+			{
+				lineH[i] = _plateText.CalcHeight(full[i], innerW);
+				total += lineH[i] + 2f * PlateLineGap + ((i > 0) ? 1f : 0f);
+			}
+			float dotsH = typing ? _plateText.CalcHeight(dotsC, innerW) : 0f;
+			if (typing)
+			{
+				total += dotsH + 2f * PlateLineGap + ((lines.Count > 0) ? 1f : 0f);
+			}
+			float h;
+			h = PlateHeight.TryGetValue(id, out h) ? Mathf.Lerp(h, total, Mathf.Clamp01(Time.unscaledDeltaTime * 12f)) : total;
+			if (Event.current.type == EventType.Repaint)
+			{
+				PlateHeight[id] = h;
+			}
+			Color state = StateColor(co);
+			Rect r = onScreen ? new Rect(target.x - w / 2f, target.y - h - 6f, w, h) : EdgeRect(target, w, h, state);
+			// The plate fades with its newest line (over its last half second), unless they're typing.
+			float plateAlpha = typing ? 1f : 0f;
+			foreach (Bubble b in lines)
+			{
+				plateAlpha = Mathf.Max(plateAlpha, Mathf.Clamp01((b.Until - now) * 2f));
+			}
+			Color keep = GUI.color;
+			Color back = radio ? RadioBack : PlateBack;
+			Color ink = radio ? RadioInk : (muted ? MutedInk : PlateInk);
+			GUI.color = new Color(back.r, back.g, back.b, back.a * plateAlpha * keep.a);
+			GUI.DrawTexture(r, _white);
+			GUI.color = new Color(state.r, state.g, state.b, plateAlpha * keep.a);
+			if (radio)
+			{
+				// Over the radio: the strip broken into dashes, a dashed outline in the radio's tone.
+				for (float dy = 0f; dy < r.height; dy += 9f)
+				{
+					GUI.DrawTexture(new Rect(r.x, r.y + dy, PlateStripe, Mathf.Min(6f, r.height - dy)), _white);
+				}
+				GUI.color = new Color(RadioTone.r, RadioTone.g, RadioTone.b, 0.6f * plateAlpha * keep.a);
+				for (float dx = PlateStripe + 2f; dx < r.width; dx += 9f)
+				{
+					float len = Mathf.Min(6f, r.width - dx);
+					GUI.DrawTexture(new Rect(r.x + dx, r.y, len, 1f), _white);
+					GUI.DrawTexture(new Rect(r.x + dx, r.yMax - 1f, len, 1f), _white);
+				}
+				for (float dy = 0f; dy < r.height; dy += 9f)
+				{
+					GUI.DrawTexture(new Rect(r.xMax - 1f, r.y + dy, 1f, Mathf.Min(6f, r.height - dy)), _white);
+				}
+			}
+			else
+			{
+				GUI.DrawTexture(new Rect(r.x, r.y, PlateStripe, r.height), _white);
+			}
+			// Laid out from the bottom: while the plate eases to a new height, the top is what's cut off.
+			GUI.BeginGroup(r);
+			float x = PlateStripe + PlatePadX;
+			float y = h - total + PlatePadY;
+			Color title = radio ? RadioTone : (muted ? MutedInk : state);
+			GUI.color = new Color(title.r, title.g, title.b, plateAlpha * keep.a);
+			GUI.Label(new Rect(x, y, innerW, headerH), headerC, _plateName);
+			y += headerH;
+			Color rule = new Color(title.r, title.g, title.b, 0.25f * plateAlpha * keep.a);
+			for (int i = 0; i < lines.Count; i++)
+			{
+				Bubble b = lines[i];
+				if (i > 0)
+				{
+					GUI.color = rule;
+					GUI.DrawTexture(new Rect(x, y, innerW, 1f), _white);
+					y += 1f;
+				}
+				y += PlateLineGap;
+				int prefix = b.Name.Length + (b.Action ? 1 : 2);
+				int t = Mathf.Clamp(Typed(b, prefix, now) - prefix, 0, b.Text.Length);
+				int age = lines.Count - 1 - i + (typing ? 1 : 0);
+				float dim = PlateDim[Mathf.Min(age, PlateDim.Length - 1)];
+				float fade = Mathf.Clamp01((b.Until - now) * 2f);
+				GUI.color = new Color(ink.r * dim, ink.g * dim, ink.b * dim, fade * keep.a);
+				GUI.Label(new Rect(x, y, innerW, lineH[i]), LineText(b, (b.Muted && !mine) ? Lips(b.Text.Substring(0, t)) : NoTags(b.Text.Substring(0, t))), _plateText);
+				y += lineH[i] + PlateLineGap;
+			}
+			if (typing)
+			{
+				if (lines.Count > 0)
+				{
+					GUI.color = rule;
+					GUI.DrawTexture(new Rect(x, y, innerW, 1f), _white);
+					y += 1f;
+				}
+				y += PlateLineGap;
+				GUI.color = new Color(ink.r, ink.g, ink.b, keep.a);
+				GUI.Label(new Rect(x, y, innerW, dotsH), new string('.', 1 + Mathf.FloorToInt(now * 3f) % 3), _plateText);
+			}
+			GUI.EndGroup();
+			GUI.color = keep;
+			return true;
 		}
 
 		private static void DrawMarks()
@@ -1347,13 +1948,15 @@ namespace OstranautsMP
 			EnsurePdaApp();
 			PdaChat.Update();
 			PdaProfile.Update();
+			UpdateVoice();
+			UpdateTyping();
 			if (CrewSim.objInstance == null)
 			{
 				_weSetTyping = false;
 				return;
 			}
 			// While our IMGUI text field has focus the game's hotkeys (WASD, pause...) stay quiet.
-			bool typing = _focused || PdaProfile.Editing;
+			bool typing = _focused || PdaProfile.Editing || PdaChat.Editing;
 			if (typing && !CrewSim.Typing)
 			{
 				CrewSim.Typing = true;

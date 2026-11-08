@@ -3,7 +3,7 @@ using UnityEngine;
 namespace OstranautsMP
 {
 	// A message from the other player in the PDA chat, while the chat isn't open: a box in the bottom right corner for
-	// a few seconds (their avatar, name and the start of the text) and the game's social message sound. Clicking it
+	// a few seconds (their avatar, name and the start of the text); the sound is Chat's. Clicking it
 	// opens the chat. In the game only; a new message replaces the box.
 	public static class PdaNotify
 	{
@@ -49,13 +49,6 @@ namespace OstranautsMP
 			}
 			_color = color;
 			_until = Time.unscaledTime + Seconds;
-			try
-			{
-				AudioManager.am.PlayAudioEmitter("UIMessageLogSocial", bLoop: false);
-			}
-			catch
-			{
-			}
 		}
 
 		// Called from Plugin.OnGUI.

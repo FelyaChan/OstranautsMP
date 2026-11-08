@@ -19,7 +19,7 @@ namespace OstranautsMP
 
 		public const string PluginName = "Ostranauts Multiplayer";
 
-		public const string Version = "0.40.2";
+		public const string Version = "0.41.0";
 
 		internal static ManualLogSource Log;
 
@@ -46,6 +46,10 @@ namespace OstranautsMP
 		private static ConfigEntry<bool> _highlights;
 
 		internal static bool HighlightsOn => _highlights == null || _highlights.Value;
+
+		private static ConfigEntry<bool> _speechEffects;
+
+		internal static bool SpeechEffectsOn => _speechEffects == null || _speechEffects.Value;
 
 		// Ping colours offered in the Multiplayer window.
 		private static readonly string[] MarkPalette = { "FFD933", "FF8A1F", "FF4D4D", "FF5FD2", "B06CFF", "4DA6FF", "2BD9C8", "6BFF6B", "F2F2F2" };
@@ -114,6 +118,7 @@ namespace OstranautsMP
 			_lastPort = Config.Bind("General", "LastPort", "7777", "Port used for the last Host or Join.");
 			_markColor = Config.Bind("General", "MarkColor", MarkPalette[0], "Colour of your pings (~ key), hex RRGGBB.");
 			_highlights = Config.Bind("General", "Highlights", true, "Your lockers light up in your colour under the mouse; the other player's character has a faint aura in their colour while yours can see them.");
+			_speechEffects = Config.Bind("General", "SpeechEffects", true, "Speech bubbles make a sound for each letter, in the speaker's voice.");
 			Apart.Init(Config);
 			Profile.Load();
 			_address = _lastAddress.Value;
@@ -133,6 +138,7 @@ namespace OstranautsMP
 			TryPatch("MainMenu.Start", () => harmony.Patch(AccessTools.Method(typeof(MainMenu), "Start"), postfix: new HarmonyMethod(typeof(Plugin), nameof(MainMenuStartPostfix))));
 			TryPatch("MainMenu.EnsureSingleInstance", () => harmony.Patch(AccessTools.Method(typeof(MainMenu), "EnsureSingleInstance"), prefix: new HarmonyMethod(typeof(Plugin), nameof(EnsureSingleInstancePrefix))));
 			TryPatch("LoadManager.OnLoadSelectedSave", () => harmony.Patch(AccessTools.Method(typeof(LoadManager), "OnLoadSelectedSave"), prefix: new HarmonyMethod(typeof(Plugin), nameof(LoadSelectedSavePrefix))));
+			TryPatch("LoadManager.SaveGame", () => harmony.Patch(AccessTools.Method(typeof(LoadManager), "SaveGame"), prefix: new HarmonyMethod(typeof(Plugin), nameof(SaveGamePrefix))));
 			TryPatch("WorldSync", () => WorldSync.Patch(harmony));
 			TryPatch("OrderSync", () => OrderSync.Patch(harmony));
 			TryPatch("ItemSync", () => ItemSync.Patch(harmony));
@@ -286,8 +292,25 @@ namespace OstranautsMP
 			}
 		}
 
+		// Host: tell the client a save is starting (the game stands still while it writes one).
+		private static void SaveGamePrefix()
+		{
+			if (Net.CurrentMode == NetSession.Mode.Host && Net.Connected && WorldSync.InGame)
+			{
+				Net.Send("HOSTSAVE");
+			}
+		}
+
 		private static void RouteMessage(string cmd, string arg)
 		{
+			if (cmd == "HOSTSAVE")
+			{
+				if (WorldSync.InGame)
+				{
+					Alert.Show("The host is saving the game. Things may stop for a few seconds.");
+				}
+				return;
+			}
 			if (!WorldSync.OnMessage(cmd, arg, Time.unscaledTime) && !OrderSync.OnMessage(cmd, arg) && !ItemSync.OnMessage(cmd, arg, Time.unscaledTime) && !CrewClaim.OnMessage(cmd, arg) && !Chat.OnMessage(cmd, arg) && !DockSync.OnMessage(cmd, arg) && !ShipSync.OnMessage(cmd, arg, Time.unscaledTime) && !Budget.OnMessage(cmd, arg) && !PlayerInteractions.OnMessage(cmd, arg) && !Apart.OnMessage(cmd, arg) && !WorkProgress.OnMessage(cmd, arg) && !Ownership.OnMessage(cmd, arg) && !Mirror.OnMessage(cmd, arg) && !Highlights.OnMessage(cmd, arg) && !ClientLoad.OnMessage(cmd, arg) && !PdaProfile.OnMessage(cmd, arg))
 			{
 				// The save transfer is the client's; the host has nobody left to give it to.
@@ -327,6 +350,7 @@ namespace OstranautsMP
 				SaveSync.ResetReceive();
 			}
 			WorldSync.Update(Time.unscaledTime);
+			ChatVoice.UpdatePreview();
 			ItemSync.Update();
 			ItemSync.RetryUpdate(Time.unscaledTime);
 			ItemSync.HostCheck(Time.unscaledTime);
@@ -538,6 +562,11 @@ namespace OstranautsMP
 			if (hl != _highlights.Value)
 			{
 				_highlights.Value = hl;
+			}
+			bool se = GUILayout.Toggle(_speechEffects.Value, " Speech effects");
+			if (se != _speechEffects.Value)
+			{
+				_speechEffects.Value = se;
 			}
 			GUILayout.Space(8f);
 			if (GUILayout.Button(Chat.MenuWindowOpen ? "Hide chat" : "Chat"))

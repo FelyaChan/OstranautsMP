@@ -13,7 +13,8 @@ namespace OstranautsMP
 	// messages are drawn over that area, like a messenger: the sender's avatar (their profile's portrait), their colour
 	// and name, the in-game time (real time for messages sent from the menus), the text and a button to delete it; a
 	// line between messages more than 5 minutes apart (in-game minutes when both have an in-game time from the same
-	// game, else real ones), and "Delete chat" for all of them. Nothing is typed here.
+	// game, else real ones), and "Delete chat" for all of them. Under them a field to write in: Enter or Send sends it
+	// as a PDA message.
 	// The messages and avatars are kept with the profile on this computer (PdaLog).
 	//
 	// The page is opened by GUIPDA.OpenApp("mpchat") (see Chat): the PDA goes to its "Loading" state, which shows
@@ -46,9 +47,23 @@ namespace OstranautsMP
 
 		private static GUIStyle _small;
 
+		private static GUIStyle _field;
+
 		private static Texture2D _white;
 
 		internal static bool IsOpen => _open;
+
+		private const string InputControl = "MPPdaChatInput";
+
+		private static string _draft = "";
+
+		private static bool _editing;
+
+		// The field, in the page area's coordinates (from the last Repaint).
+		private static Rect _fieldRect;
+
+		// Our field has the keyboard: the game's hotkeys stay quiet (Chat).
+		internal static bool Editing => _open && _editing;
 
 		// Returns false if the PDA's pages couldn't be used (then nothing changes).
 		public static bool Toggle(GUIPDA pda)
@@ -78,7 +93,12 @@ namespace OstranautsMP
 			{
 				CanvasManager.HideCanvasGroup(_cg);
 			}
+			if (_editing)
+			{
+				GUIUtility.keyboardControl = 0;
+			}
 			_open = false;
+			_editing = false;
 		}
 
 		// Main thread, every frame.
@@ -186,6 +206,8 @@ namespace OstranautsMP
 			_body.fontSize = 19;
 			_body.wordWrap = true;
 			_body.normal.textColor = Color.white;
+			_field = new GUIStyle(GUI.skin.textField);
+			_field.fontSize = 19;
 			_small = new GUIStyle(GUI.skin.button);
 			_small.fontSize = 15;
 			_small.padding = new RectOffset(4, 4, 1, 1);
@@ -285,6 +307,37 @@ namespace OstranautsMP
 				GUILayout.Space(10f);
 			}
 			GUILayout.EndScrollView();
+			GUILayout.Space(6f);
+			GUILayout.BeginHorizontal();
+			// Enter sends; IMGUI reports it as a KeyDown on the focused field.
+			bool focused = GUI.GetNameOfFocusedControl() == InputControl;
+			// A click anywhere else gives the keyboard back to the game (WASD with the PDA open).
+			if (focused && Event.current.type == EventType.MouseDown && !_fieldRect.Contains(Event.current.mousePosition))
+			{
+				GUIUtility.keyboardControl = 0;
+				focused = false;
+			}
+			bool enter = Event.current.type == EventType.KeyDown && (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter) && focused;
+			GUI.SetNextControlName(InputControl);
+			_draft = GUILayout.TextField(_draft, 300, _field, GUILayout.ExpandWidth(true));
+			if (Event.current.type == EventType.Repaint)
+			{
+				_fieldRect = GUILayoutUtility.GetLastRect();
+			}
+			if (GUILayout.Button("Send", _small, GUILayout.Width(70f)) || enter)
+			{
+				Chat.SendPda(_draft);
+				_draft = "";
+				if (enter)
+				{
+					Event.current.Use();
+				}
+			}
+			GUILayout.EndHorizontal();
+			if (Event.current.type == EventType.Repaint)
+			{
+				_editing = focused;
+			}
 			GUILayout.EndArea();
 			if (delete != null)
 			{

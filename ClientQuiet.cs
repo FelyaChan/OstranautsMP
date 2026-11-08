@@ -16,6 +16,9 @@ namespace OstranautsMP
 	//
 	// Bills: Ledger.ProcessRepeating (salaries, rent, mortgage turning into bills) doesn't run on the client; the
 	// host's ledger is the real one, and the client sees its part in the BUDGET app.
+	//
+	// Shops: Trader.Restock (kiosks, vending machines, brokers clearing their stock and making new) doesn't run on the
+	// client; the host's restock reaches it through ItemSync.
 	public static class ClientQuiet
 	{
 		public static void Patch(Harmony harmony)
@@ -32,6 +35,7 @@ namespace OstranautsMP
 			}
 			harmony.Patch(AccessTools.Method(typeof(PlotManager), "CheckPlots"), prefix: offBool);
 			harmony.Patch(AccessTools.Method(typeof(Ledger), "ProcessRepeating"), prefix: new HarmonyMethod(typeof(ClientQuiet), nameof(Off)));
+			harmony.Patch(AccessTools.Method(typeof(Trader), "Restock"), prefix: new HarmonyMethod(typeof(ClientQuiet), nameof(Off)));
 		}
 
 		private static bool Quiet => WorldSync.ClientFollowsHost && WorldSync.InGame;

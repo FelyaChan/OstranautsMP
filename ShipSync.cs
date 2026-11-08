@@ -43,6 +43,8 @@ namespace OstranautsMP
 	//   NEEDSHIP <reg>              client -> host
 	//   PILOT <reg>|<x>|<y>|<r>|<noiseOnly>|<engineMode>   client -> host; x = y = r = 0 stops
 	//   BIN SHIPNEW <gzip JSON DockSync.DockPayload>
+	//   NAVCLEAR <P|T>|<reg>|<id>^<id>...  both ways: the nav station's Prox / Track "Clear" button was pressed; the
+	//                               receiver ignores those ships too, and its own current ones
 	public static class ShipSync
 	{
 		private const double NearAU = 0.1;
@@ -145,6 +147,8 @@ namespace OstranautsMP
 				}
 			}
 			harmony.Patch(AccessTools.Method(typeof(Ship), "Maneuver"), prefix: new HarmonyMethod(typeof(ShipSync), nameof(ManeuverPrefix)));
+			harmony.Patch(AccessTools.Method(typeof(Ostranauts.ShipGUIs.NavStation.NavModWarnings), "ProxClear"), postfix: new HarmonyMethod(typeof(ShipSync), nameof(ProxClearPostfix)));
+			harmony.Patch(AccessTools.Method(typeof(Ostranauts.ShipGUIs.NavStation.NavModWarnings), "TrackClear"), postfix: new HarmonyMethod(typeof(ShipSync), nameof(TrackClearPostfix)));
 		}
 
 		private static bool Mirroring => WorldSync.ClientFollowsHost && WorldSync.InGame;
@@ -611,6 +615,12 @@ namespace OstranautsMP
 						HostOnPilot(arg, now);
 					}
 					return true;
+				case "NAVCLEAR":
+					if (WorldSync.InGame && CrewSim.system != null)
+					{
+						ApplyNavClear(arg);
+					}
+					return true;
 				case "NEEDSHIP":
 					if (Plugin.Net.CurrentMode == NetSession.Mode.Host && WorldSync.InGame)
 					{
@@ -620,6 +630,73 @@ namespace OstranautsMP
 				default:
 					return false;
 			}
+		}
+
+		// ---- Nav station "Clear" (both sides) -------------------------------------------------------------------
+
+		private static readonly System.Reflection.FieldInfo NavCOSelf = AccessTools.Field(typeof(Ostranauts.ShipGUIs.NavStation.NavModBase), "COSelf");
+
+		private static void ProxClearPostfix(object __instance)
+		{
+			SendNavClear("P", NavShip(__instance));
+		}
+
+		private static void TrackClearPostfix(object __instance)
+		{
+			SendNavClear("T", NavShip(__instance));
+		}
+
+		private static Ship NavShip(object nav)
+		{
+			CondOwner co = (NavCOSelf != null) ? NavCOSelf.GetValue(nav) as CondOwner : null;
+			return (co != null) ? co.ship : null;
+		}
+
+		private static void SendNavClear(string kind, Ship ship)
+		{
+			if (ship == null || ship.strRegID == null || !Plugin.Net.Connected || !WorldSync.InGame)
+			{
+				return;
+			}
+			List<string> ids = (kind == "P") ? ship.aProxIgnores : ship.aTrackIgnores;
+			Plugin.Net.Send("NAVCLEAR " + kind + "|" + ship.strRegID + "|" + string.Join("^", ids.ToArray()));
+		}
+
+		// The same as the button (NavModWarnings.ProxClear / TrackClear), with the sender's ships added: each side
+		// counts its own current ones (the track warning is only worked out on the host).
+		private static void ApplyNavClear(string arg)
+		{
+			string[] f = arg.Split('|');
+			if (f.Length != 3)
+			{
+				return;
+			}
+			Ship ship = CrewSim.system.GetShipByRegID(f[1]);
+			if (ship == null || ship.bDestroyed || ship.aProxIgnores == null)
+			{
+				return;
+			}
+			bool prox = f[0] == "P";
+			List<string> ignores = prox ? ship.aProxIgnores : ship.aTrackIgnores;
+			List<string> current = prox ? ship.aProxCurrent : ship.aTrackCurrent;
+			ignores.Clear();
+			ignores.AddRange(current);
+			foreach (string id in f[2].Split('^'))
+			{
+				if (id.Length > 0 && !ignores.Contains(id))
+				{
+					ignores.Add(id);
+				}
+			}
+			if (prox)
+			{
+				ship.proximityWarning = false;
+			}
+			else
+			{
+				ship.trackWarning = false;
+			}
+			Plugin.Log.LogInfo("Nav " + (prox ? "proximity" : "tracking") + " warning cleared by the other player on " + f[1]);
 		}
 
 		// Main thread; the SHIPNEW binary frame.

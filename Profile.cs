@@ -45,7 +45,24 @@ namespace OstranautsMP
 
 			// Free text the player writes in the PDA's PROFILE app; others see it there too.
 			public string Bio;
+
+			// Speech voice (ChatVoice): semitones from the base note, and speed (1 = normal; 0 in old profiles).
+			public double VoicePitch;
+
+			public double VoiceSpeed;
 		}
+
+		internal const float MinPitch = -12f;
+
+		internal const float MaxPitch = 12f;
+
+		internal const float MinSpeed = 0.5f;
+
+		internal const float MaxSpeed = 2f;
+
+		internal static float VoicePitch => (Current != null) ? Mathf.Clamp((float)Current.VoicePitch, MinPitch, MaxPitch) : 0f;
+
+		internal static float VoiceSpeed => (Current != null && Current.VoiceSpeed > 0.0) ? Mathf.Clamp((float)Current.VoiceSpeed, MinSpeed, MaxSpeed) : 1f;
 
 		internal const string Gpm = "MPProfile";
 
@@ -85,7 +102,7 @@ namespace OstranautsMP
 
 		private static Rect _rect = new Rect(0f, 0f, MenuLook.Big(560f), 10f);
 
-		private static readonly string[] Tabs = { "Looks", "Skills" };
+		private static readonly string[] Tabs = { "Looks", "Skills", "Voice" };
 
 		private static int _tab;
 
@@ -371,6 +388,8 @@ namespace OstranautsMP
 			_edit.Attract = (Current.Attract != null) ? (string[])Current.Attract.Clone() : new string[0];
 			_edit.Skills = (Current.Skills != null) ? (string[])Current.Skills.Clone() : new string[0];
 			_edit.Bio = Current.Bio;
+			_edit.VoicePitch = VoicePitch;
+			_edit.VoiceSpeed = VoiceSpeed;
 			_edit.Body = Current.Body;
 			_edit.Face = (Current.Face != null && Current.Face.Length > 0) ? (string[])Current.Face.Clone() : FaceAnim2.GetRandomFace(_edit.Gender != "IsFemale", _edit.Gender != "IsMale");
 			_edit.Skin = Current.Skin ?? FaceAnim2.GetFaceGroups(_edit.Face)[0];
@@ -600,6 +619,10 @@ namespace OstranautsMP
 			{
 				DrawSkills();
 			}
+			else if (_tab == 2)
+			{
+				DrawVoice();
+			}
 			else
 			{
 				DrawLooks();
@@ -649,6 +672,22 @@ namespace OstranautsMP
 			_skillCheck.onHover.background = MenuLook.CheckOn;
 			_skillCheck.onActive.background = MenuLook.CheckOff;
 			_skillCheck.margin = new RectOffset(4, 8, 4, 4);
+		}
+
+		// The Voice tab: how speech sounds over the character (ChatVoice).
+		private static void DrawVoice()
+		{
+			GUILayout.Label("Pitch: " + ((_edit.VoicePitch > 0.0) ? "+" : "") + Math.Round(_edit.VoicePitch) + " semitones");
+			_edit.VoicePitch = Math.Round(GUILayout.HorizontalSlider((float)_edit.VoicePitch, MinPitch, MaxPitch));
+			GUILayout.Space(12f);
+			GUILayout.Label("Speed: " + _edit.VoiceSpeed.ToString("0.00") + "x");
+			_edit.VoiceSpeed = Math.Round(GUILayout.HorizontalSlider((float)_edit.VoiceSpeed, MinSpeed, MaxSpeed) * 20.0) / 20.0;
+			GUILayout.Space(12f);
+			if (GUILayout.Button("Listen"))
+			{
+				ChatVoice.Preview((float)_edit.VoicePitch, (float)_edit.VoiceSpeed);
+			}
+			GUILayout.Space(12f);
 		}
 
 		private static void DrawSkills()

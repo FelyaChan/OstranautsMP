@@ -41,7 +41,7 @@ The host's game stays paused while the client loads, including when the client j
 
 | What | How |
 |---|---|
-| Talk | **Enter** → type → **Enter** (speech bubble) |
+| Talk | **Enter** → type → **Enter** (voiced; heard in the same room or in sight; in a helmet with a charged suit battery, over the radio, anywhere) |
 | PDA message | `/pda text`, or `/pda` alone to switch the field. Read in the **CHAT** app on the PDA |
 | Ping | `~` on a spot, item or person |
 | Pause both | **Space** |
@@ -51,6 +51,7 @@ The host's game stays paused while the client loads, including when the client j
 | Mark a locker yours | right-click a container → **Make it mine** / **Give it up** (a label only) |
 | Money | **BUDGET** app: the host sets salary and gives money; the client sees their wallet |
 | Profile, bio, training | **PROFILE** app on the PDA |
+| Your voice | character editor → **Voice**: pitch and speed, **Listen** to hear it |
 | Chat commands | `/pda`, `/me`, `/sync`, `/fixships` (listed when the field opens) |
 
 ## Features
@@ -65,7 +66,7 @@ The host's game stays paused while the client loads, including when the client j
 
 **Your character** *(experimental)*. Profile made in the menu (looks, name, pronouns, up to 5 skills) becomes your avatar and your new bodies. On death you watch and take a new body when the host's ship is in port, with 80% of the training. Your character can't quit the crew.
 
-**Together.** Dialogue between players both ways; give items, offer money ($10 / $100 / $250), follow, emotes, play dead *(experimental)*. Optional **Highlights**: your lockers glow under the mouse, the other player has a faint aura while you can see them. The client can trade with their own money *(experimental)*.
+**Together.** Dialogue between players both ways; give items, offer money ($10 / $100 / $250), follow, emotes, play dead *(experimental)*. Speech bubbles are voiced letter by letter from the speaker, in 3D (off with **Speech effects**). Optional **Highlights**: your lockers glow under the mouse, the other player has a faint aura while you can see them. The client can trade with their own money *(experimental)*.
 
 ## Files
 

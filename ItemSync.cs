@@ -117,10 +117,11 @@ namespace OstranautsMP
 
 		private static bool FlushAllowed => _suppressDepth <= 0 && Plugin.Net.Connected && WorldSync.InGame && (Plugin.Net.CurrentMode == NetSession.Mode.Host || WorldSync.ClientFollowsHost);
 
-		// Physical items: not people (they have a pathfinder and sync through POS/CONDS), not rooms, not ship records.
+		// Physical items: not people (they have a pathfinder and sync through POS/CONDS), not rooms, not ship records,
+		// not the ship's hidden grid tiles (TIL: each side's ship makes its own as items are placed near its edge).
 		private static bool IsItem(CondOwner co)
 		{
-			return co != null && !co.bDestroyed && co.strID != null && co.Item != null && co.Pathfinder == null && !co.HasCond("IsRoom");
+			return co != null && !co.bDestroyed && co.strID != null && co.Item != null && co.Pathfinder == null && !co.HasCond("IsRoom") && !co.HasCond("IsTile");
 		}
 
 		// Both sides now have the same world (host: the save was just sent; client: it was just loaded).
@@ -1091,6 +1092,13 @@ namespace OstranautsMP
 				{
 					Plugin.Log.LogInfo("Item " + save.strID + " changed from " + co.strCODef + " to " + save.strCODef);
 				}
+				// Walls, doors, airlocks: switch it the game's way, which keeps the ship's rooms; taking one out and
+				// putting a new one in has the game rebuild every room of the ship.
+				CondOwner switched = SwitchKind(co, save);
+				if (switched != null)
+				{
+					return switched;
+				}
 				Unstack(co);
 				co.RemoveFromCurrentHome(bForce: true);
 				co.Destroy();
@@ -1108,6 +1116,38 @@ namespace OstranautsMP
 				Plugin.Log.LogInfo("Item made from the other side's save: " + Describe(co));
 			}
 			return co;
+		}
+
+		private static CondOwner SwitchKind(CondOwner co, JsonCondOwnerSave save)
+		{
+			if (!co.HasCond("IsCheckRoom") || co.ship == null)
+			{
+				return null;
+			}
+			// The same steps as the game's own switch (Interaction, objLootModeSwitch): the new kind takes the old ID.
+			string id = co.strID;
+			CondOwner coNew = null;
+			try
+			{
+				coNew = DataHandler.GetCondOwner(save.strCODef, null, null, bLoot: false, null, null, id);
+				if (coNew == null)
+				{
+					DataHandler.mapCOs[id] = co;
+					return null;
+				}
+				co.ModeSwitch(coNew, co.tf.position);
+				ApplyConds(coNew, save);
+			}
+			catch (Exception e)
+			{
+				Plugin.Log.LogWarning("Could not switch " + id + " to " + save.strCODef + ": " + e.Message);
+				if (coNew == null)
+				{
+					DataHandler.mapCOs[id] = co;
+					return null;
+				}
+			}
+			return coNew;
 		}
 
 		// Existing item, full save received: bring its conditions to the save's values.

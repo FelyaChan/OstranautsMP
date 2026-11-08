@@ -3,6 +3,28 @@
 All notable changes to the Ostranauts Multiplayer Mod.
 Host and client must run the same version.
 
+## [0.41.0] - 2026-11-08
+
+### Added
+- Speech sounds: each letter of a speech bubble makes a short synthesized sound from the speaker, in 3D and through the game's world sound (quieter far away, muffled in a helmet, silent in vacuum; the effects volume sets it). **Speech effects** in the Multiplayer window turns it off.
+- Voice in the character editor (**Voice** tab): pitch and speed, with **Listen** to hear it. The speed also sets how fast your bubbles type.
+- A "..." over a player's character while they type in the quick chat, for both players.
+- Client: an alert when the host starts saving.
+- PDA chat: a field to write in (Enter or **Send**), and a sound for every message received, chat open or not.
+- Radio: in a helmet with a charged suit battery, speech goes over the suit radio, with its own plate and sound. It reaches two or three rooms; each line takes 1% of the battery; below half charge, at the edge of its range or through the hull, letters are lost to static. Out loud, speech is only heard in the same room or in sight of the speaker. In a helmet without power, or with no air around, nobody hears it: others only see the lips move.
+- Nav station: **Clear** for the proximity and tracking warnings clears them for both players.
+
+### Changed
+- PDA chat keeps the last 100 messages (was 200).
+- Speech bubbles are now one plate per speaker: their name on top, their last lines under it (older ones dimmer), a strip in the colour of how they're doing; "..." is its last line while they type.
+
+### Fixed
+- Client: looking into a container sometimes failed with "Unable to comply" (the host checked it against its own character).
+- Client: no message when an action failed on the host, e.g. a repair missing parts.
+- Client: every door or airlock opening or closing rebuilt all rooms of the ship. Now switched the game's way.
+- The ship's hidden grid tiles are no longer synced (each side makes its own).
+- Client: shops and vending machines restocked by themselves on the client too, leaving extra stock the host didn't have. Restock is the host's now.
+
 ## [0.40.2] - 2026-11-08
 
 ### Fixed

@@ -13,7 +13,7 @@ namespace OstranautsMP
 	//
 	// Files (BepInEx/config):
 	// - OstranautsMP_pda.txt: one message per line, "<id>|<real time, UTC ticks>|<in-game epoch, empty in menus>|
-	//   <colour hex>|<sender profile ID>|<action 0/1>|<sender name>|<text>"; the last 200 are kept.
+	//   <colour hex>|<sender profile ID>|<action 0/1>|<sender name>|<text>"; the last 100 are kept.
 	// - OstranautsMP_avatars/<profile ID>.png: the other players' avatars as they last sent them (own avatar:
 	//   Profile.Avatar).
 	//
@@ -41,7 +41,7 @@ namespace OstranautsMP
 			public string Text;
 		}
 
-		private const int MaxEntries = 200;
+		private const int MaxEntries = 100;
 
 		private const int IdLength = 32;
 
@@ -115,6 +115,11 @@ namespace OstranautsMP
 				Plugin.Log.LogWarning("PDA log: could not read " + FilePath + ": " + ex.Message);
 			}
 			_entries.Sort((Entry a, Entry b) => a.Ticks.CompareTo(b.Ticks));
+			// A file from a version that kept more.
+			if (_entries.Count > MaxEntries)
+			{
+				_entries.RemoveRange(0, _entries.Count - MaxEntries);
+			}
 			return _entries;
 		}
 
