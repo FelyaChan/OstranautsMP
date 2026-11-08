@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -26,6 +27,19 @@ namespace OstranautsMP
 
 		private StreamWriter _writer;
 
+		// Repeats: past RepeatLimit times in a minute, the same message (with its stack) is only counted, and the count
+		// is written once the minute is up. A message repeated every frame then costs a line a minute, not megabytes.
+		private const int RepeatLimit = 10;
+
+		// Messages tracked per minute at most; past that, new ones are written without counting.
+		private const int RepeatKeysMax = 5000;
+
+		private static readonly TimeSpan RepeatWindow = TimeSpan.FromMinutes(1.0);
+
+		private readonly Dictionary<string, int> _seen = new Dictionary<string, int>();
+
+		private DateTime _windowStart = DateTime.UtcNow;
+
 		public static void Start()
 		{
 			InstanceLog log = new InstanceLog();
@@ -41,7 +55,6 @@ namespace OstranautsMP
 			Process p = Process.GetCurrentProcess();
 			log.Write("=== " + Plugin.PluginName + " " + Plugin.Version + " | pid " + p.Id + " | Unity " + Application.unityVersion + " | started " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
 			log.Write("Command line: " + Environment.CommandLine);
-			log.Write("Persistent data: " + Application.persistentDataPath);
 			log.Write("System memory: " + SystemInfo.systemMemorySize + " MB, GPU: " + SystemInfo.graphicsDeviceName + " (" + SystemInfo.graphicsMemorySize + " MB)");
 			log.LogMemory();
 		}
@@ -102,13 +115,32 @@ namespace OstranautsMP
 				{
 					return;
 				}
-				try
+				int n;
+				if (_seen.TryGetValue(line, out n))
 				{
-					_writer.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + line);
+					_seen[line] = n + 1;
+					if (n >= RepeatLimit)
+					{
+						return;
+					}
 				}
-				catch
+				else if (_seen.Count < RepeatKeysMax)
 				{
+					_seen[line] = 1;
 				}
+				WriteLine(line);
+			}
+		}
+
+		// Caller holds _lock.
+		private void WriteLine(string line)
+		{
+			try
+			{
+				_writer.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + line);
+			}
+			catch
+			{
 			}
 		}
 
@@ -134,14 +166,43 @@ namespace OstranautsMP
 
 		public void Flush()
 		{
+			Flush(false);
+		}
+
+		// <final>: the game is closing, write the counts now.
+		public void Flush(bool final)
+		{
 			lock (_lock)
 			{
+				if (_writer == null)
+				{
+					return;
+				}
+				if (final || DateTime.UtcNow - _windowStart >= RepeatWindow)
+				{
+					foreach (KeyValuePair<string, int> kv in _seen)
+					{
+						if (kv.Value > RepeatLimit)
+						{
+							string first = kv.Key;
+							int nl = first.IndexOf('\n');
+							if (nl >= 0)
+							{
+								first = first.Substring(0, nl);
+							}
+							if (first.Length > 300)
+							{
+								first = first.Substring(0, 300) + "...";
+							}
+							WriteLine("[Repeated] " + (kv.Value - RepeatLimit) + " more times in the last minute: " + first);
+						}
+					}
+					_seen.Clear();
+					_windowStart = DateTime.UtcNow;
+				}
 				try
 				{
-					if (_writer != null)
-					{
-						_writer.Flush();
-					}
+					_writer.Flush();
 				}
 				catch
 				{

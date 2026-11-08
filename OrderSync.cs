@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Text;
 using HarmonyLib;
 using Ostranauts.InputControl;
 using UnityEngine;
@@ -17,9 +18,17 @@ namespace OstranautsMP
 	//
 	// Clicks and WASD: these end in CondOwner.AIIssueOrder, which is relayed (ORDER).
 	//
-	// In both cases the client also runs the action locally as a prediction (footprints, local walk); position,
-	// animation and items still come from the host. Orders from the client's own AI (WorkManager, pledges) are not
-	// sent.
+	// In both cases the client also runs the action locally as a prediction (footprints, local walk, the queue);
+	// position, animation and the progress bar come from the host. While following the host, the prediction has no
+	// effects: Interaction.ApplyEffects / ApplyChain don't run here for the client's own character, so damage, items,
+	// conditions and kind changes (a wall breaking) only ever come from the host. The game's own messages about a
+	// prediction failing here (unable to do it, can't reach it) aren't shown either: whether it fails is the host's
+	// call. Orders from the client's own AI (WorkManager, pledges) are not sent.
+	//
+	// A direct order from the client (not task work: the work manager retries those its own way, nor the AI's own
+	// actions) that the host's copy drops without doing it (the game's re-check on arrival fails, the target can't be
+	// reached, it's cancelled) is dropped on the client too, and the reason the game gave goes to the client
+	// character's log.
 	//
 	// Inventory screen: it moves items directly, not through orders. Those moves are relayed by ItemSync while
 	// InUserInput is true; the inventory UI methods are part of the input scope for that reason.
@@ -27,6 +36,8 @@ namespace OstranautsMP
 	// Protocol (client -> host):
 	//   ORDER <us>|<target>|<interaction>|<playerOrdered 0|1>|<hasTile 0|1>|<tileX>|<tileY>|<posX>|<posY>
 	//   PROCESS <us>|<target>|<interaction>
+	// Protocol (host -> client):
+	//   IADROP <us>|<interaction>|<target>|<cancelling 0|1>|<base64 reason>
 	public static class OrderSync
 	{
 		private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -45,6 +56,28 @@ namespace OstranautsMP
 		// Host: inside a relayed client order or menu action (the client's character is selected for the call).
 		internal static bool HostRelaying;
 
+		// Host: the client character's queued actions whose effects have been applied (done, not dropped).
+		private static readonly HashSet<Interaction> _applied = new HashSet<Interaction>();
+
+		// Host: actions queued by a relayed client order, outside task work. Only these are reported when dropped.
+		private static readonly HashSet<Interaction> _direct = new HashSet<Interaction>();
+
+		// Host: the client character's last "Bad" log line, and the frame it came in.
+		private static string _lastBad;
+
+		private static int _lastBadFrame = -1;
+
+		// Client: the game's "unable to do" / "can't reach" message openings, for hiding prediction failures.
+		private static string _cantDo;
+
+		private static string _cantReach;
+
+		// Client: a message from the host is being written to the character's log; let it through.
+		private static bool _hostMessage;
+
+		// Not followed: the game keeps replacing these, and they leave nothing behind.
+		private static readonly HashSet<string> NotDropped = new HashSet<string> { "Walk", "Wait", "QuickWait" };
+
 		public static void Patch(Harmony harmony)
 		{
 			HarmonyMethod enter = new HarmonyMethod(typeof(OrderSync), nameof(EnterInput));
@@ -54,6 +87,14 @@ namespace OstranautsMP
 			harmony.Patch(AccessTools.Method(typeof(CommandMovePlayer), "Execute"), prefix: enter, finalizer: exit);
 			harmony.Patch(AccessTools.Method(typeof(RadialContextMenuObject), "ProcessInteraction", new Type[] { typeof(Interaction) }), prefix: new HarmonyMethod(typeof(OrderSync), nameof(ProcessPrefix)), finalizer: new HarmonyMethod(typeof(OrderSync), nameof(ProcessFinalizer)));
 			harmony.Patch(AccessTools.Method(typeof(CondOwner), "AIIssueOrder"), prefix: new HarmonyMethod(typeof(OrderSync), nameof(AIIssueOrderPrefix)), postfix: new HarmonyMethod(typeof(OrderSync), nameof(AIIssueOrderPostfix)));
+			HarmonyMethod applied = new HarmonyMethod(typeof(OrderSync), nameof(AppliedPostfix));
+			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyEffects", new Type[] { typeof(List<string>), typeof(bool) }), postfix: applied);
+			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyChain", new Type[] { typeof(List<string>) }), postfix: applied);
+			harmony.Patch(AccessTools.Method(typeof(CondOwner), "ClearInteraction"), prefix: new HarmonyMethod(typeof(OrderSync), nameof(ClearInteractionPrefix)));
+			harmony.Patch(AccessTools.Method(typeof(CondOwner), "LogMessage"), prefix: new HarmonyMethod(typeof(OrderSync), nameof(LogMessagePrefix)), postfix: new HarmonyMethod(typeof(OrderSync), nameof(LogMessagePostfix)));
+			HarmonyMethod noEffects = new HarmonyMethod(typeof(OrderSync), nameof(NoEffectsPrefix));
+			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyEffects", new Type[] { typeof(List<string>), typeof(bool) }), prefix: noEffects);
+			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyChain", new Type[] { typeof(List<string>) }), prefix: noEffects);
 			int patched = 0;
 			foreach (Type t in typeof(Ostranauts.Inventory.GUIInventory).Assembly.GetTypes())
 			{
@@ -126,7 +167,7 @@ namespace OstranautsMP
 				return true;
 			}
 			Plugin.Net.Send("PROCESS " + interaction.objUs.strID + "|" + ((interaction.objThem != null) ? interaction.objThem.strID : "") + "|" + interaction.strName);
-			Plugin.Log.LogInfo("Action sent: " + interaction.objUs.strName + " " + interaction.strName + NeedsDiag(interaction.objUs));
+			Plugin.Log.LogInfo("Action sent: " + interaction.objUs.strName + " " + interaction.strName);
 			_inProcess++;
 			__state = true;
 			return true;
@@ -150,6 +191,14 @@ namespace OstranautsMP
 		// Sent only if the order went through here too, so the host doesn't do what the client couldn't.
 		private static void AIIssueOrderPostfix(bool __result, CondOwner __instance, CondOwner coTarget, Interaction objInt, bool bPlayerOrdered, Tile til, float fPosX, float fPosY)
 		{
+			if (HostRelaying && __result && objInt != null && Array.IndexOf(JsonCompanyRules.aDutiesNew, objInt.strDuty) < 0 && HostWatches(__instance))
+			{
+				if (_direct.Count > 200)
+				{
+					_direct.Clear();
+				}
+				_direct.Add(objInt);
+			}
 			// Inside a relayed menu action the host issues this order itself.
 			if (!__result || _userInput <= 0 || _inProcess > 0 || !ClientActive)
 			{
@@ -171,32 +220,160 @@ namespace OstranautsMP
 			}
 		}
 
-		// TEMP diagnostics (remove after the satiety fix): needs values and their hidden level flags (Dc...).
-		private static string NeedsDiag(CondOwner co)
+		// Host: the client's character, while its actions are carried out here (not apart, client in the game).
+		private static bool HostWatches(CondOwner co)
 		{
-			if (co == null || co.mapConds == null)
+			if (Plugin.Net.CurrentMode != NetSession.Mode.Host || !Plugin.Net.Connected || !WorldSync.InGame || Apart.HostActive)
 			{
-				return "";
+				return false;
 			}
-			System.Text.StringBuilder sb = new System.Text.StringBuilder(" [");
-			foreach (string stat in new string[] { "StatSatiety", "StatHydration" })
-			{
-				sb.Append(stat).Append('=').Append(co.GetCondAmount(stat).ToString("0.###", Inv)).Append(' ');
-			}
-			foreach (string name in co.mapConds.Keys)
-			{
-				if (name.StartsWith("DcSatiety", StringComparison.Ordinal) || name.StartsWith("DcHydration", StringComparison.Ordinal))
-				{
-					sb.Append(name).Append('=').Append(co.GetCondAmount(name).ToString("0.###", Inv)).Append(' ');
-				}
-			}
-			sb.Append("frozen rules: ").Append(co.bFreezeCondRules).Append(']');
-			return sb.ToString();
+			CondOwner client = CrewClaim.HostClaimed;
+			return client != null && co == client;
 		}
 
-		// Host side, main thread. Returns false if the message isn't ours.
+		private static void AppliedPostfix(Interaction __instance)
+		{
+			CondOwner us = __instance.objUs;
+			if (us == null || us.aQueue == null || !us.aQueue.Contains(__instance) || !HostWatches(us))
+			{
+				return;
+			}
+			// Interactions the game drops without clearing stay here; keep it small.
+			if (_applied.Count > 200)
+			{
+				_applied.Clear();
+			}
+			_applied.Add(__instance);
+		}
+
+		// Client: the client's own character while its actions are only predicted here.
+		private static bool PredictedHere(CondOwner co)
+		{
+			if (Plugin.Net.CurrentMode != NetSession.Mode.Client || co == null || !ClientActive)
+			{
+				return false;
+			}
+			CondOwner mine = CrewClaim.ClientMine;
+			return mine != null && co == mine;
+		}
+
+		// Inside player input outside a relayed menu action (the inventory screen), the effects stay: the host can't
+		// reproduce those from an order, ItemSync sends their result.
+		private static bool NoEffectsPrefix(Interaction __instance)
+		{
+			bool relayedOrQueued = _userInput <= 0 || _inProcess > 0;
+			return !(relayedOrQueued && PredictedHere(__instance.objUs));
+		}
+
+		private static bool LogMessagePrefix(CondOwner __instance, string strMsg, string strColor)
+		{
+			if (_hostMessage || strColor != "Bad" || strMsg == null || !PredictedHere(__instance))
+			{
+				return true;
+			}
+			if (_cantDo == null)
+			{
+				_cantDo = DataHandler.GetString("ERROR_CANT_DO_IA");
+				_cantReach = DataHandler.GetString("ERROR_CANT_REACH_DEST");
+			}
+			bool prediction = (!string.IsNullOrEmpty(_cantDo) && strMsg.StartsWith(_cantDo, StringComparison.Ordinal)) || (!string.IsNullOrEmpty(_cantReach) && strMsg.StartsWith(_cantReach, StringComparison.Ordinal));
+			return !prediction;
+		}
+
+		private static void LogMessagePostfix(CondOwner __instance, string strMsg, string strColor)
+		{
+			if (strColor == "Bad" && HostWatches(__instance))
+			{
+				_lastBad = strMsg;
+				_lastBadFrame = Time.frameCount;
+			}
+		}
+
+		// Host: the client's character leaves an action. Done (its effects applied) or dropped; a dropped one is sent.
+		private static void ClearInteractionPrefix(CondOwner __instance, Interaction objInteraction, bool bCancelling)
+		{
+			if (objInteraction == null || !HostWatches(__instance))
+			{
+				return;
+			}
+			bool direct = _direct.Remove(objInteraction);
+			if (_applied.Remove(objInteraction) || !direct)
+			{
+				return;
+			}
+			string name = objInteraction.strName;
+			if (name == null || NotDropped.Contains(name) || __instance.aQueue == null || !__instance.aQueue.Contains(objInteraction))
+			{
+				return;
+			}
+			string them = (objInteraction.objThem != null) ? objInteraction.objThem.strID : "";
+			string reason = (_lastBadFrame == Time.frameCount && _lastBad != null) ? _lastBad : "";
+			Plugin.Net.Send("IADROP " + __instance.strID + "|" + name + "|" + them + "|" + (bCancelling ? "1" : "0") + "|" + Convert.ToBase64String(Encoding.UTF8.GetBytes(reason)));
+			Plugin.Log.LogInfo("Dropped client action " + name + (bCancelling ? " (cancelled)" : "") + ((reason.Length > 0) ? (": " + reason) : ""));
+		}
+
+		// Client: the host dropped an action of ours; drop our prediction of it if it's still queued here.
+		private static void ClientDrop(string[] f)
+		{
+			if (f.Length != 5 || !WorldSync.InGame || Apart.ClientActive)
+			{
+				return;
+			}
+			CondOwner mine = CrewClaim.ClientMine;
+			if (mine == null || mine.strID != f[0] || mine.aQueue == null)
+			{
+				return;
+			}
+			Interaction found = null;
+			foreach (Interaction ia in mine.aQueue)
+			{
+				if (ia != null && ia.strName == f[1] && ((ia.objThem != null) ? ia.objThem.strID : "") == f[2])
+				{
+					found = ia;
+					break;
+				}
+			}
+			string reason = Encoding.UTF8.GetString(Convert.FromBase64String(f[4]));
+			if (found == null)
+			{
+				Plugin.Log.LogInfo("Host dropped " + f[1] + "; not queued here (done already or never started)");
+				return;
+			}
+			mine.ClearInteraction(found, f[3] == "1");
+			// Only direct orders come here (task work retries its own way), so the host's reason is the real one.
+			if (reason.Length > 0)
+			{
+				_hostMessage = true;
+				try
+				{
+					mine.LogMessage(reason, "Bad", mine.strName);
+				}
+				finally
+				{
+					_hostMessage = false;
+				}
+			}
+			Plugin.Log.LogInfo("Host dropped " + f[1] + ((reason.Length > 0) ? (": " + reason) : ""));
+		}
+
+		// Main thread. Returns false if the message isn't ours.
 		public static bool OnMessage(string cmd, string arg)
 		{
+			if (cmd == "IADROP")
+			{
+				if (Plugin.Net.CurrentMode == NetSession.Mode.Client)
+				{
+					try
+					{
+						ClientDrop(arg.Split('|'));
+					}
+					catch (Exception e)
+					{
+						Plugin.Log.LogError("IADROP failed: " + e);
+					}
+				}
+				return true;
+			}
 			if (cmd != "ORDER" && cmd != "PROCESS")
 			{
 				return false;
@@ -270,18 +447,22 @@ namespace OstranautsMP
 			}
 			ia.objUs = us;
 			ia.objThem = them;
-			Plugin.Log.LogInfo("Action received: " + us.strName + " " + f[2] + NeedsDiag(us));
+			Plugin.Log.LogInfo("Action received: " + us.strName + " " + f[2]);
 			// Resume/cancel task are menu wrappers: the game doesn't check their own conditions, so neither do we.
 			if (them != null && f[2] != "ACTResumeTaskThem" && f[2] != "ACTCancelTaskThem")
 			{
 				// Same check the menu makes; log why it fails here, the game only tells the character's message log.
 				bool chanceSkip = CondTrigger.bChanceSkip;
 				CondTrigger.bChanceSkip = true;
+				// Verbose: otherwise the game only records "Unable to comply", not which of us / them / room / items failed.
+				bool verbose = ia.bVerboseTrigger;
+				ia.bVerboseTrigger = true;
 				bool ok = ia.Triggered(us, them);
+				ia.bVerboseTrigger = verbose;
 				CondTrigger.bChanceSkip = chanceSkip;
 				if (!ok)
 				{
-					Plugin.Log.LogWarning("Client action fails on host: " + us.strName + " " + f[2] + ": " + ia.FailReasons(bUsThem: true, bItems: true, bDebug: false));
+					Plugin.Log.LogWarning("Client action fails on host: " + us.strName + " " + f[2] + ": " + ia.FailReasons(bUsThem: true, bItems: true, bDebug: true));
 				}
 			}
 			// ProcessInteraction uses the selected crew (manual AI mode, quick bar); select the client's character for the call.

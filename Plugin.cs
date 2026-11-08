@@ -19,7 +19,7 @@ namespace OstranautsMP
 
 		public const string PluginName = "Ostranauts Multiplayer";
 
-		public const string Version = "0.36.1";
+		public const string Version = "0.40.2";
 
 		internal static ManualLogSource Log;
 
@@ -28,6 +28,12 @@ namespace OstranautsMP
 		internal static readonly NetSession Net = new NetSession();
 
 		private const int WindowId = 0x0B4F1;
+
+		private const string DiscordUrl = "https://discord.gg/TnVpW7yBxG";
+
+		private const string GitHubUrl = "https://github.com/FelyaChan/OstranautsMP";
+
+		private static GUIStyle _reportStyle;
 
 		private static ConfigEntry<string> _playerName;
 
@@ -90,6 +96,9 @@ namespace OstranautsMP
 
 		private string _port = "7777";
 
+		// The name being typed; saved with the Save button.
+		private string _nameEdit = "";
+
 		private float _nextPing;
 
 		private float _nextMemoryLog;
@@ -109,6 +118,7 @@ namespace OstranautsMP
 			Profile.Load();
 			_address = _lastAddress.Value;
 			_port = _lastPort.Value;
+			_nameEdit = PlayerName;
 			Net.OnMessage = RouteMessage;
 			Net.OnConnected = OnPeerConnected;
 			Net.OnBinary = RouteBinary;
@@ -120,26 +130,49 @@ namespace OstranautsMP
 			};
 			MenuLook.OnClick = OpenWindow;
 			Harmony harmony = new Harmony(Guid);
-			harmony.Patch(AccessTools.Method(typeof(MainMenu), "Start"), postfix: new HarmonyMethod(typeof(Plugin), nameof(MainMenuStartPostfix)));
-			harmony.Patch(AccessTools.Method(typeof(MainMenu), "EnsureSingleInstance"), prefix: new HarmonyMethod(typeof(Plugin), nameof(EnsureSingleInstancePrefix)));
-			harmony.Patch(AccessTools.Method(typeof(LoadManager), "OnLoadSelectedSave"), prefix: new HarmonyMethod(typeof(Plugin), nameof(LoadSelectedSavePrefix)));
-			WorldSync.Patch(harmony);
-			OrderSync.Patch(harmony);
-			ItemSync.Patch(harmony);
-			CrewClaim.Patch(harmony);
-			Chat.Patch(harmony);
-			DockSync.Patch(harmony);
-			ShipSync.Patch(harmony);
-			ClientQuiet.Patch(harmony);
-			Budget.Patch(harmony);
-			PlayerInteractions.Patch(harmony);
-			Apart.Patch(harmony);
-			WorkProgress.Patch(harmony);
-			ClientLoad.Patch(harmony);
-			Ownership.Patch(harmony);
-			Mirror.Patch(harmony);
+			TryPatch("MainMenu.Start", () => harmony.Patch(AccessTools.Method(typeof(MainMenu), "Start"), postfix: new HarmonyMethod(typeof(Plugin), nameof(MainMenuStartPostfix))));
+			TryPatch("MainMenu.EnsureSingleInstance", () => harmony.Patch(AccessTools.Method(typeof(MainMenu), "EnsureSingleInstance"), prefix: new HarmonyMethod(typeof(Plugin), nameof(EnsureSingleInstancePrefix))));
+			TryPatch("LoadManager.OnLoadSelectedSave", () => harmony.Patch(AccessTools.Method(typeof(LoadManager), "OnLoadSelectedSave"), prefix: new HarmonyMethod(typeof(Plugin), nameof(LoadSelectedSavePrefix))));
+			TryPatch("WorldSync", () => WorldSync.Patch(harmony));
+			TryPatch("OrderSync", () => OrderSync.Patch(harmony));
+			TryPatch("ItemSync", () => ItemSync.Patch(harmony));
+			TryPatch("CrewClaim", () => CrewClaim.Patch(harmony));
+			TryPatch("Chat", () => Chat.Patch(harmony));
+			TryPatch("DockSync", () => DockSync.Patch(harmony));
+			TryPatch("ShipSync", () => ShipSync.Patch(harmony));
+			TryPatch("ClientQuiet", () => ClientQuiet.Patch(harmony));
+			TryPatch("Budget", () => Budget.Patch(harmony));
+			TryPatch("PlayerInteractions", () => PlayerInteractions.Patch(harmony));
+			TryPatch("Apart", () => Apart.Patch(harmony));
+			TryPatch("WorkProgress", () => WorkProgress.Patch(harmony));
+			TryPatch("ClientLoad", () => ClientLoad.Patch(harmony));
+			TryPatch("Ownership", () => Ownership.Patch(harmony));
+			TryPatch("Mirror", () => Mirror.Patch(harmony));
+			if (PatchProblem != null)
+			{
+				Log.LogError(PatchProblem);
+			}
 			RemoveUnitySingleInstance();
 			Log.LogInfo(PluginName + " " + Version + " loaded" + ((InstanceLog.Instance != null) ? (", instance log: " + InstanceLog.Instance.FilePath) : ", instance log unavailable"));
+		}
+
+		// Patches that failed (a game update renamed or changed what they patch). Any failure turns Host and Join off:
+		// half the sync is worse than none. Patches a module made before its failure stay in place.
+		private static readonly List<string> _failedPatches = new List<string>();
+
+		internal static string PatchProblem => (_failedPatches.Count == 0) ? null : ("Mod not fully loaded (" + string.Join(", ", _failedPatches.ToArray()) + "): did the game update? Host and Join are off.");
+
+		private static void TryPatch(string name, Action patch)
+		{
+			try
+			{
+				patch();
+			}
+			catch (Exception e)
+			{
+				_failedPatches.Add(name);
+				Log.LogError("Patch failed: " + name + ": " + e);
+			}
 		}
 
 		// Unity checks this flag natively before plugins load, so removing it only takes effect on the next launch.
@@ -184,6 +217,10 @@ namespace OstranautsMP
 		{
 			Menu = __instance;
 			_menuBlocked = false;
+			if (PatchProblem != null)
+			{
+				Alert.Show(PatchProblem);
+			}
 		}
 
 		private static bool EnsureSingleInstancePrefix(ref bool __result)
@@ -228,9 +265,24 @@ namespace OstranautsMP
 			{
 				PdaLog.OnAvatar(data);
 			}
-			else
+			else if (cmd == "CHUNK")
 			{
 				SaveSync.OnBinary(cmd, data);
+			}
+			else
+			{
+				WarnUnknown("BIN " + cmd);
+			}
+		}
+
+		// Commands nobody handled, logged once each: with both sides on one version, that's a bug of ours.
+		private static readonly HashSet<string> _unknown = new HashSet<string>();
+
+		private static void WarnUnknown(string cmd)
+		{
+			if (_unknown.Add(cmd))
+			{
+				Log.LogWarning("Unknown message: " + cmd + " (further ones not logged)");
 			}
 		}
 
@@ -238,7 +290,15 @@ namespace OstranautsMP
 		{
 			if (!WorldSync.OnMessage(cmd, arg, Time.unscaledTime) && !OrderSync.OnMessage(cmd, arg) && !ItemSync.OnMessage(cmd, arg, Time.unscaledTime) && !CrewClaim.OnMessage(cmd, arg) && !Chat.OnMessage(cmd, arg) && !DockSync.OnMessage(cmd, arg) && !ShipSync.OnMessage(cmd, arg, Time.unscaledTime) && !Budget.OnMessage(cmd, arg) && !PlayerInteractions.OnMessage(cmd, arg) && !Apart.OnMessage(cmd, arg) && !WorkProgress.OnMessage(cmd, arg) && !Ownership.OnMessage(cmd, arg) && !Mirror.OnMessage(cmd, arg) && !Highlights.OnMessage(cmd, arg) && !ClientLoad.OnMessage(cmd, arg) && !PdaProfile.OnMessage(cmd, arg))
 			{
-				SaveSync.OnMessage(cmd, arg);
+				// The save transfer is the client's; the host has nobody left to give it to.
+				if (Net.CurrentMode == NetSession.Mode.Client)
+				{
+					SaveSync.OnMessage(cmd, arg);
+				}
+				else
+				{
+					WarnUnknown(cmd);
+				}
 			}
 		}
 
@@ -323,6 +383,9 @@ namespace OstranautsMP
 			{
 				if (_windowOpen)
 				{
+					// Fit to what it shows now: after Host / Join it has less in it, and a kept old height leaves a gap.
+					_windowRect.width = MenuLook.Big(380f);
+					_windowRect.height = 10f;
 					_windowRect = GUILayout.Window(WindowId, _windowRect, DrawWindow, "MULTIPLAYER", MenuLook.BigWindow);
 					// Bigger than it was: keep it on the screen.
 					_windowRect.y = Mathf.Max(0f, Mathf.Min(_windowRect.y, Screen.height - _windowRect.height));
@@ -383,6 +446,10 @@ namespace OstranautsMP
 		private void DrawWindowContent(int id)
 		{
 			GUILayout.Label("Status: " + Net.Status);
+			if (PatchProblem != null)
+			{
+				GUILayout.Label(PatchProblem);
+			}
 			if (Net.Connected)
 			{
 				string ver = Net.RemoteVersion ?? "?";
@@ -411,36 +478,48 @@ namespace OstranautsMP
 			{
 				// The name goes to the other player when connecting, so it can only be changed while not connected.
 				GUILayout.Label("Your name");
-				string name = GUILayout.TextField(_playerName.Value, 32);
-				if (name != _playerName.Value)
+				GUILayout.BeginHorizontal();
+				_nameEdit = GUILayout.TextField(_nameEdit, 32);
+				// Written to the config here and by Host / Join, not on every key.
+				string typed = _nameEdit.Trim();
+				GUI.enabled = typed.Length > 0 && typed != _playerName.Value;
+				if (GUILayout.Button("Save", GUILayout.Width(MenuLook.Big(70f))))
 				{
-					_playerName.Value = name;
+					SaveName();
 				}
+				GUI.enabled = true;
+				GUILayout.EndHorizontal();
 				GUILayout.Space(8f);
 				GUILayout.Label("Port");
 				_port = GUILayout.TextField(_port);
+				GUI.enabled = PatchProblem == null;
 				if (GUILayout.Button("Host"))
 				{
 					int port;
 					if (TryParsePort(out port))
 					{
+						SaveName();
 						_lastPort.Value = _port.Trim();
 						Net.Host(port);
 					}
 				}
+				GUI.enabled = true;
 				GUILayout.Space(8f);
 				GUILayout.Label("Host address");
 				_address = GUILayout.TextField(_address);
+				GUI.enabled = PatchProblem == null;
 				if (GUILayout.Button("Join"))
 				{
 					int port;
 					if (TryParsePort(out port))
 					{
+						SaveName();
 						_lastAddress.Value = _address.Trim();
 						_lastPort.Value = _port.Trim();
 						Net.Join(_address.Trim(), port);
 					}
 				}
+				GUI.enabled = true;
 			}
 			else
 			{
@@ -450,7 +529,6 @@ namespace OstranautsMP
 					Net.Stop();
 				}
 			}
-			GUILayout.Space(8f);
 			GUILayout.Space(8f);
 			DrawProfile();
 			GUILayout.Space(8f);
@@ -473,6 +551,29 @@ namespace OstranautsMP
 					_windowOpen = false;
 				}
 			}
+			GUILayout.Space(8f);
+			// Fixed sizes: the row looks the same whatever the window shows above it.
+			if (_reportStyle == null)
+			{
+				_reportStyle = new GUIStyle(GUI.skin.label);
+				_reportStyle.alignment = TextAnchor.MiddleLeft;
+				_reportStyle.wordWrap = false;
+			}
+			GUIContent report = new GUIContent("Report bug:");
+			float rowH = GUI.skin.button.CalcHeight(report, 100f);
+			float linkW = MenuLook.Big(90f);
+			GUILayout.BeginHorizontal();
+			GUILayout.Label(report, _reportStyle, GUILayout.Width(_reportStyle.CalcSize(report).x), GUILayout.Height(rowH));
+			if (GUILayout.Button("Discord", GUILayout.Width(linkW), GUILayout.Height(rowH)))
+			{
+				Application.OpenURL(DiscordUrl);
+			}
+			if (GUILayout.Button("GitHub", GUILayout.Width(linkW), GUILayout.Height(rowH)))
+			{
+				Application.OpenURL(GitHubUrl);
+			}
+			GUILayout.FlexibleSpace();
+			GUILayout.EndHorizontal();
 			GUI.DragWindow();
 		}
 
@@ -575,6 +676,17 @@ namespace OstranautsMP
 			GUILayout.EndHorizontal();
 		}
 
+		// Trimmed; an empty name isn't saved, and the field goes back to the name that's sent.
+		private void SaveName()
+		{
+			string n = _nameEdit.Trim();
+			if (n.Length > 0)
+			{
+				_playerName.Value = n;
+			}
+			_nameEdit = PlayerName;
+		}
+
 		private bool TryParsePort(out int port)
 		{
 			if (int.TryParse(_port.Trim(), out port) && port > 0 && port < 65536)
@@ -624,7 +736,7 @@ namespace OstranautsMP
 			Net.Stop();
 			if (InstanceLog.Instance != null)
 			{
-				InstanceLog.Instance.Flush();
+				InstanceLog.Instance.Flush(true);
 			}
 		}
 	}

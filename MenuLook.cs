@@ -102,6 +102,11 @@ namespace OstranautsMP
 				_failed = true;
 				return;
 			}
+			// The last menu's button went with its scene; its material didn't.
+			if (_material != null)
+			{
+				UnityEngine.Object.Destroy(_material);
+			}
 			_material = new Material(r.sharedMaterial);
 			_material.SetTexture("_MainTex", _tex);
 			r.material = _material;

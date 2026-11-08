@@ -198,6 +198,11 @@ namespace OstranautsMP
 			if (!__state && __result != null && __result.strID != null && _applyingDepth <= 0 && _suppressDepth <= 0 && Plugin.Net.Connected && WorldSync.InGame)
 			{
 				Fresh.Add(__result.strID);
+				// The client makes its own items only from what the player does (sent) or by itself (never sent).
+				if (Plugin.Net.CurrentMode == NetSession.Mode.Client && IsItem(__result))
+				{
+					Plugin.Log.LogInfo("Item made here: " + Describe(__result) + (Tracking ? "" : " (not sent)"));
+				}
 			}
 		}
 
@@ -239,6 +244,7 @@ namespace OstranautsMP
 			if (Apart.HostSends(__instance))
 			{
 				Plugin.Net.Send("GONE " + __instance.strID);
+				Plugin.Log.LogInfo("Item gone, sent: " + Describe(__instance));
 			}
 		}
 
@@ -352,6 +358,7 @@ namespace OstranautsMP
 		{
 			if (Fresh.Remove(co.strID))
 			{
+				Plugin.Log.LogInfo("Item sent in full: " + Describe(co));
 				sb.Append('S').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonMapper.ToJson(co.GetJSONSave()))));
 				return;
 			}
@@ -815,11 +822,40 @@ namespace OstranautsMP
 			CondOwner co;
 			if (!DataHandler.mapCOs.TryGetValue(id, out co) || co == null || co.bDestroyed)
 			{
+				Plugin.Log.LogInfo("GONE for an item not here: " + id);
 				return;
 			}
+			Plugin.Log.LogInfo("Item gone on the other side: " + Describe(co) + " " + Where(co));
 			Unstack(co);
 			co.RemoveFromCurrentHome(bForce: true);
 			co.Destroy();
+		}
+
+		// For the log: kind and ID.
+		private static string Describe(CondOwner co)
+		{
+			return (co.strCODef ?? "?") + " " + co.strID;
+		}
+
+		// For the log: where an item is (floor tile, or inside / on whom).
+		private static string Where(CondOwner co)
+		{
+			try
+			{
+				CondOwner parent = co.objCOParent;
+				if (parent != null)
+				{
+					return "(in " + (parent.strCODef ?? "?") + " " + parent.strID + ")";
+				}
+				if (co.tf != null)
+				{
+					return "(at " + Mathf.RoundToInt(co.tf.position.x) + "," + Mathf.RoundToInt(co.tf.position.y) + ")";
+				}
+			}
+			catch
+			{
+			}
+			return "";
 		}
 
 		// Returns false when an item or the parent doesn't exist here yet (asked for with NEED; retry later).
@@ -1032,6 +1068,7 @@ namespace OstranautsMP
 			}
 			NeedSent[id] = now;
 			Plugin.Net.Send("NEED " + id);
+			Plugin.Log.LogInfo("Asked the other side for item " + id);
 		}
 
 		private static CondOwner GetOrCreate(JsonCondOwnerSave save)
@@ -1068,6 +1105,7 @@ namespace OstranautsMP
 			if (co != null)
 			{
 				co.strID = save.strID;
+				Plugin.Log.LogInfo("Item made from the other side's save: " + Describe(co));
 			}
 			return co;
 		}

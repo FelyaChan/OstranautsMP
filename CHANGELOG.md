@@ -3,6 +3,100 @@
 All notable changes to the Ostranauts Multiplayer Mod.
 Host and client must run the same version.
 
+## [0.40.2] - 2026-11-08
+
+### Fixed
+- Multiplayer window: after Host or Join it kept its old size and the **Report bug** row shifted.
+
+## [0.40.1] - 2026-11-08
+
+### Changed
+- Item log: items sent and made in full, removed (with kind and place), asked for, and made by the client on its own.
+
+## [0.40.0] - 2026-11-08
+
+### Changed
+- Client: your character's actions show at once, but their effects (damage, items, things breaking) come only from the host. A bashed wall breaks on both at the same moment, with no extra debris.
+- Client: the game's "unable to" / "can't reach" messages for your character are hidden; the host's reason is shown when it can't carry out a direct order.
+
+## [0.39.3] - 2026-11-08
+
+### Changed
+- Host log: a client action failing the host's check names what failed.
+
+## [0.39.2] - 2026-11-08
+
+### Fixed
+- Client: task work (bash, repair, build) no longer pauses for a moment while the host's work manager retries.
+
+## [0.39.1] - 2026-11-08
+
+### Fixed
+- Client: no "Unable to comply" in the character's log for a step the game retried another way.
+
+## [0.39.0] - 2026-11-08
+
+### Fixed
+- Client: a direct order the host couldn't carry out is dropped on the client too.
+
+## [0.38.1] - 2026-11-08
+
+### Removed
+- The temporary satiety log (0.35.11).
+
+## [0.38.0] - 2026-11-08
+
+### Added
+- **Report bug:** links to Discord and GitHub at the bottom of the Multiplayer window.
+
+## [0.37.5] - 2026-11-08
+
+### Fixed
+- The Multiplayer button's material was left behind each time the main menu opened again.
+
+## [0.37.4] - 2026-11-08
+
+### Fixed
+- Client: a save that arrived incomplete was loaded anyway. Now it isn't, and on any failed save transfer the client says why and disconnects, so the host no longer waits for it with the game paused.
+
+## [0.37.3] - 2026-11-08
+
+### Changed
+- Instance log: a message repeated more than 10 times in a minute is counted instead of written, with one summary line per minute.
+
+## [0.37.2] - 2026-11-08
+
+### Changed
+- The mod's logs no longer write the full path of the game's data folder, which contains the Windows user name.
+
+## [0.37.1] - 2026-11-08
+
+### Changed
+- A client connecting again from the same address takes its place at once, without waiting for the old connection to time out. Other connections while a client is connected are refused and logged.
+
+## [0.37.0] - 2026-11-08
+
+### Fixed
+- The host could freeze while sending the save over a slow connection: sending now goes through a queue written by its own thread, and the save waits its turn instead of holding up the game.
+- A connection is dropped when the other side stops taking data for 20 seconds, or sends a message far bigger than the mod ever sends.
+- A save still being sent when its client leaves is no longer sent on to the next client.
+
+## [0.36.4] - 2026-11-08
+
+### Changed
+- Messages nobody handles are logged, once each (the host didn't log them at all).
+- The player name is trimmed when saved; an empty name isn't saved.
+
+## [0.36.3] - 2026-11-08
+
+### Changed
+- If a patch fails to install (e.g. after a game update), the rest still install. **Host** and **Join** are then off, and the main menu says which parts failed.
+
+## [0.36.2] - 2026-11-08
+
+### Changed
+- The player name is saved with the **Save** button (or on **Host** / **Join**), not on every key typed.
+
 ## [0.36.1] - 2026-11-07
 
 ### Fixed

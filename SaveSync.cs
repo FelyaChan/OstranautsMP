@@ -24,6 +24,9 @@ namespace OstranautsMP
 
 		private const int ChunkSize = 256 * 1024;
 
+		// Queued ahead of the wire at most; the game's own messages wait behind no more than this.
+		private const long MaxQueued = 1024 * 1024;
+
 		// Shown in the UI; null when nothing is happening.
 		public static volatile string Progress;
 
@@ -79,7 +82,8 @@ namespace OstranautsMP
 			ItemSync.ResetKnown();
 			SendFraction = 0f;
 			ClientLoad.Begin();
-			int gen = net.Generation;
+			// The connection it's for: if that client goes and another comes, the rest isn't sent to the new one.
+			int conn = net.ConnId;
 			Thread t = new Thread(() =>
 			{
 				long sent = 0L;
@@ -89,7 +93,7 @@ namespace OstranautsMP
 					net.Send("FILE " + Convert.ToBase64String(Encoding.UTF8.GetBytes(file.Key)) + " " + file.Value.Length);
 					for (int off = 0; off < file.Value.Length; off += ChunkSize)
 					{
-						if (net.Generation != gen)
+						if (!net.WaitQueue(MaxQueued, conn))
 						{
 							Progress = null;
 							return;
@@ -100,6 +104,11 @@ namespace OstranautsMP
 						SendFraction = (total > 0L) ? ((float)sent / (float)total) : 1f;
 						Progress = "Sending save: " + Mb(sent) + " / " + Mb(total) + " MB";
 					}
+				}
+				if (!net.WaitQueue(MaxQueued, conn))
+				{
+					Progress = null;
+					return;
 				}
 				net.Send("SAVE_END");
 				Progress = null;
@@ -248,7 +257,11 @@ namespace OstranautsMP
 						OpenFile(arg);
 						break;
 					case "SAVE_END":
-						CloseFile();
+						// A file still open, or fewer bytes than announced: the save is cut short, don't load it.
+						if (_file != null || _received != _total)
+						{
+							throw new Exception("save incomplete, " + Mb(_received) + " / " + Mb(_total) + " MB");
+						}
 						Progress = null;
 						LoadReceived();
 						break;
@@ -259,10 +272,19 @@ namespace OstranautsMP
 			}
 			catch (Exception e)
 			{
-				ResetReceive();
-				Progress = "Save transfer failed: " + e.Message;
-				Plugin.Log.LogError(Progress);
+				Fail(e.Message);
 			}
+		}
+
+		// Client: the save can't be used. Say so and leave, so the host stops waiting for READY; joining again
+		// sends a new save.
+		private static void Fail(string why)
+		{
+			ResetReceive();
+			string text = "Save transfer failed: " + why;
+			Plugin.Log.LogError(text);
+			Alert.Show(text);
+			Plugin.Net.Stop();
 		}
 
 		public static void ResetReceive()
@@ -283,7 +305,7 @@ namespace OstranautsMP
 			_total = total;
 			_received = 0L;
 			Progress = "Receiving save: 0 / " + Mb(_total) + " MB";
-			Plugin.Log.LogInfo("Receiving save into " + _folder + ", " + total + " bytes");
+			Plugin.Log.LogInfo("Receiving save into Saves/" + FolderName + ", " + total + " bytes");
 		}
 
 		private static void OpenFile(string arg)
@@ -319,9 +341,7 @@ namespace OstranautsMP
 			}
 			catch (Exception e)
 			{
-				ResetReceive();
-				Progress = "Save transfer failed: " + e.Message;
-				Plugin.Log.LogError(Progress);
+				Fail(e.Message);
 			}
 		}
 

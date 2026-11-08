@@ -13,6 +13,8 @@ namespace OstranautsMP
 	// Wire format: text messages are UTF-8 lines ending in '\n'. A binary message is the line "BIN <cmd> <length>"
 	// followed by <length> raw bytes (save file chunks: no base64, a third less traffic).
 	// Socket work runs on background threads; everything else happens in Poll() on the main thread.
+	// Sending only queues the message: one writer thread per connection puts the queue on the wire, so a slow or
+	// stuck peer never holds up the caller (the game's main thread).
 	public class NetSession
 	{
 		public enum Mode
@@ -64,18 +66,55 @@ namespace OstranautsMP
 
 		private const int KeepAliveMs = 2000;
 
+		// A write the peer doesn't take in for this long drops the connection.
+		private const int WriteTimeoutMs = 20000;
+
+		// Bigger than anything the mod sends (the largest text is a full CONDS, the largest binary a ship snapshot);
+		// a peer sending more is broken or hostile, and is dropped before the memory is taken.
+		private const int MaxLineBytes = 16 * 1024 * 1024;
+
+		private const int MaxBinaryBytes = 256 * 1024 * 1024;
+
+		// One message waiting to be written: a header line, and for a binary message its bytes.
+		private struct Out
+		{
+			public byte[] Head;
+
+			public byte[] Body;
+
+			public int Offset;
+
+			public int Count;
+		}
+
+		// A connection's send queue. Lock the object itself for its fields.
+		private class Conn
+		{
+			public int Id;
+
+			public TcpClient Client;
+
+			public Stream Stream;
+
+			public readonly Queue<Out> Queue = new Queue<Out>();
+
+			// Bytes queued and not yet written.
+			public long Bytes;
+
+			public bool Closed;
+		}
+
 		private TcpListener _listener;
 
 		private TcpClient _client;
 
-		private Stream _stream;
+		private Conn _conn;
 
-		private StreamWriter _writer;
+		private int _connCount;
+
+		private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
 
 		private readonly object _lock = new object();
-
-		// Separate from _lock so a slow socket write never blocks Poll() on the main thread.
-		private readonly object _writeLock = new object();
 
 		private readonly Queue<Msg> _inbox = new Queue<Msg>();
 
@@ -85,6 +124,18 @@ namespace OstranautsMP
 		private int _generation;
 
 		public int Generation => _generation;
+
+		// Changes with every new connection (a host gets a new one each time a client connects).
+		public int ConnId
+		{
+			get
+			{
+				lock (_lock)
+				{
+					return (_conn != null) ? _conn.Id : 0;
+				}
+			}
+		}
 
 		public void Host(int port)
 		{
@@ -157,56 +208,74 @@ namespace OstranautsMP
 			LastRttMs = -1;
 		}
 
-		// Thread-safe.
+		// Thread-safe. Queues the line and returns.
 		public void Send(string line)
 		{
-			StreamWriter writer;
+			Out o;
+			o.Head = Utf8.GetBytes(line + "\n");
+			o.Body = null;
+			o.Offset = 0;
+			o.Count = 0;
+			Push(o);
+		}
+
+		// Thread-safe. Queues the message and returns; <data> must not change afterwards. <cmd> must not contain spaces.
+		public void SendBinary(string cmd, byte[] data, int offset, int count)
+		{
+			Out o;
+			o.Head = Utf8.GetBytes("BIN " + cmd + " " + count + "\n");
+			o.Body = data;
+			o.Offset = offset;
+			o.Count = count;
+			Push(o);
+		}
+
+		private void Push(Out o)
+		{
+			Conn conn;
 			lock (_lock)
 			{
-				writer = _writer;
+				conn = _conn;
 			}
-			if (writer == null)
+			if (conn == null)
 			{
 				return;
 			}
-			lock (_writeLock)
+			lock (conn)
 			{
-				try
+				if (conn.Closed)
 				{
-					writer.Write(line + "\n");
+					return;
 				}
-				catch
-				{
-					// The read thread notices the broken socket and reports the disconnect.
-				}
+				conn.Queue.Enqueue(o);
+				conn.Bytes += o.Head.Length + o.Count;
+				Monitor.Pulse(conn);
 			}
 		}
 
-		// Thread-safe. <cmd> must not contain spaces.
-		public void SendBinary(string cmd, byte[] data, int offset, int count)
+		// Any thread. Waits while more than <maxBytes> are queued on connection <connId>. False if that connection is
+		// gone (then nothing more should be sent for it).
+		public bool WaitQueue(long maxBytes, int connId)
 		{
-			StreamWriter writer;
-			Stream stream;
-			lock (_lock)
+			while (true)
 			{
-				writer = _writer;
-				stream = _stream;
-			}
-			if (writer == null || stream == null)
-			{
-				return;
-			}
-			lock (_writeLock)
-			{
-				try
+				long bytes;
+				lock (_lock)
 				{
-					// AutoFlush puts the header on the wire before the raw bytes.
-					writer.Write("BIN " + cmd + " " + count + "\n");
-					stream.Write(data, offset, count);
+					if (_conn == null || _conn.Id != connId)
+					{
+						return false;
+					}
+					lock (_conn)
+					{
+						bytes = _conn.Bytes;
+					}
 				}
-				catch
+				if (bytes <= maxBytes)
 				{
+					return true;
 				}
+				Thread.Sleep(5);
 			}
 		}
 
@@ -253,6 +322,10 @@ namespace OstranautsMP
 			{
 				if (m.Gen != _generation)
 				{
+					if (m.Line == "__takeover")
+					{
+						m.Source.Close();
+					}
 					continue;
 				}
 				if (m.Data != null)
@@ -262,6 +335,22 @@ namespace OstranautsMP
 					{
 						OnBinary(m.Line, m.Data);
 					}
+				}
+				else if (m.Line == "__takeover")
+				{
+					Plugin.Log.LogInfo("The client connected again from the same address; dropping the old connection");
+					if (Connected)
+					{
+						PeerGone("left");
+					}
+					else
+					{
+						lock (_lock)
+						{
+							CloseClient();
+						}
+					}
+					Attach(m.Source, _generation);
 				}
 				else if (m.Line == "__disconnected")
 				{
@@ -395,20 +484,43 @@ namespace OstranautsMP
 
 		private void Attach(TcpClient c, int gen)
 		{
+			Conn conn;
 			lock (_lock)
 			{
-				// Wrong session, or already have a peer (one client only for now).
-				if (gen != _generation || _client != null)
+				if (gen != _generation)
 				{
 					c.Close();
 					return;
 				}
+				// One client only. A new connection from the client's own address is the client coming back before
+				// the old connection timed out: it takes the place, after the old one leaves the usual way (Poll).
+				if (_client != null)
+				{
+					IPAddress from = Address(c);
+					if (CurrentMode == Mode.Host && from != null && from.Equals(Address(_client)))
+					{
+						Msg t;
+						t.Gen = gen;
+						t.Line = "__takeover";
+						t.Data = null;
+						t.Source = c;
+						_inbox.Enqueue(t);
+						return;
+					}
+					Plugin.Log.LogInfo("Refused a connection from " + from + ": a client is already connected");
+					c.Close();
+					return;
+				}
 				c.NoDelay = true;
+				c.SendTimeout = WriteTimeoutMs;
 				_client = c;
-				_stream = c.GetStream();
-				_writer = new StreamWriter(_stream, new UTF8Encoding(false));
-				_writer.AutoFlush = true;
+				_conn = new Conn();
+				_conn.Id = ++_connCount;
+				_conn.Client = c;
+				_conn.Stream = c.GetStream();
+				conn = _conn;
 			}
+			StartThread(() => WriteLoop(conn));
 			StartThread(() => ReadLoop(c, gen));
 			StartThread(() => KeepAlive(c, gen));
 			Enqueue(gen, "__connected", null);
@@ -430,6 +542,11 @@ namespace OstranautsMP
 					}
 					if (b != '\n')
 					{
+						if (lineBytes.Length >= MaxLineBytes)
+						{
+							Plugin.Log.LogWarning("Dropping the connection: a line over " + MaxLineBytes + " bytes");
+							break;
+						}
 						lineBytes.WriteByte((byte)b);
 						continue;
 					}
@@ -444,6 +561,12 @@ namespace OstranautsMP
 					int length;
 					if (parts.Length != 3 || !int.TryParse(parts[2], out length) || length < 0)
 					{
+						Plugin.Log.LogWarning("Dropping the connection: a bad binary header");
+						break;
+					}
+					if (length > MaxBinaryBytes)
+					{
+						Plugin.Log.LogWarning("Dropping the connection: binary " + parts[1] + " of " + length + " bytes, over " + MaxBinaryBytes);
 						break;
 					}
 					byte[] data = new byte[length];
@@ -490,6 +613,64 @@ namespace OstranautsMP
 			}
 		}
 
+		// One per connection: writes its queue in order until the connection closes.
+		private void WriteLoop(Conn conn)
+		{
+			try
+			{
+				while (true)
+				{
+					Out o;
+					lock (conn)
+					{
+						while (conn.Queue.Count == 0)
+						{
+							if (conn.Closed)
+							{
+								return;
+							}
+							Monitor.Wait(conn);
+						}
+						if (conn.Closed)
+						{
+							return;
+						}
+						o = conn.Queue.Peek();
+					}
+					conn.Stream.Write(o.Head, 0, o.Head.Length);
+					if (o.Body != null)
+					{
+						conn.Stream.Write(o.Body, o.Offset, o.Count);
+					}
+					lock (conn)
+					{
+						conn.Queue.Dequeue();
+						conn.Bytes -= o.Head.Length + o.Count;
+					}
+				}
+			}
+			catch (Exception e)
+			{
+				bool closed;
+				lock (conn)
+				{
+					closed = conn.Closed;
+				}
+				if (!closed)
+				{
+					// Closing makes the read thread report the disconnect.
+					Plugin.Log.LogWarning("Dropping the connection: sending failed (" + e.Message + ")");
+				}
+				try
+				{
+					conn.Client.Close();
+				}
+				catch
+				{
+				}
+			}
+		}
+
 		// Caller holds _lock.
 		private void CloseClient()
 		{
@@ -504,8 +685,17 @@ namespace OstranautsMP
 				}
 				_client = null;
 			}
-			_writer = null;
-			_stream = null;
+			if (_conn != null)
+			{
+				lock (_conn)
+				{
+					_conn.Closed = true;
+					_conn.Queue.Clear();
+					_conn.Bytes = 0L;
+					Monitor.PulseAll(_conn);
+				}
+				_conn = null;
+			}
 		}
 
 		private void Enqueue(int gen, string line, byte[] data)
@@ -518,6 +708,18 @@ namespace OstranautsMP
 			lock (_lock)
 			{
 				_inbox.Enqueue(m);
+			}
+		}
+
+		private static IPAddress Address(TcpClient c)
+		{
+			try
+			{
+				return ((IPEndPoint)c.Client.RemoteEndPoint).Address;
+			}
+			catch
+			{
+				return null;
 			}
 		}
 
