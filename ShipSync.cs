@@ -39,7 +39,8 @@ namespace OstranautsMP
 	//                               bodies and stations, which the client places by its own epoch
 	//                               entry: reg~x~y~vx~vy~rot~w~a~in.x~in.y~rcs.x~rcs.y~ex.x~ex.y~lift.x~lift.y~drag.x~drag.y~flags~bo~offx~offy
 	//                               flags: 1 = locked to a body, 2 = locked in orbit; bo = body name
-	//   SHIPGONE <reg>^<reg>...
+	//   SHIPGONE <reg>^<reg>...     destroyed, or hidden by the game (an AI ship that docked and "despawned",
+	//                               CrewSim.DockAndDespawn; it stays in the system, hidden, and may come back)
 	//   NEEDSHIP <reg>              client -> host
 	//   PILOT <reg>|<x>|<y>|<r>|<noiseOnly>|<engineMode>   client -> host; x = y = r = 0 stops
 	//   BIN SHIPNEW <gzip JSON DockSync.DockPayload>
@@ -176,7 +177,7 @@ namespace OstranautsMP
 			{
 				return false;
 			}
-			if (s.objSS.bIsBO || s.IsStation())
+			if (s.objSS.bIsBO || s.IsStation() || s.HideFromSystem)
 			{
 				return false;
 			}
@@ -188,7 +189,7 @@ namespace OstranautsMP
 			HashSet<string> set = new HashSet<string>();
 			foreach (Ship s in CrewSim.system.dictShips.Values)
 			{
-				if (s != null && !s.bDestroyed && s.Classification != Ship.TypeClassification.Projectile && s.Classification != Ship.TypeClassification.Waypoint)
+				if (s != null && !s.bDestroyed && !s.HideFromSystem && s.Classification != Ship.TypeClassification.Projectile && s.Classification != Ship.TypeClassification.Waypoint)
 				{
 					set.Add(s.strRegID);
 				}
@@ -860,9 +861,31 @@ namespace OstranautsMP
 			foreach (string reg in arg.Split('^'))
 			{
 				Ship s = CrewSim.system.GetShipByRegID(reg);
-				if (s == null || s.bDestroyed || s == cur || (cur != null && System.Linq.Enumerable.Contains(cur.GetAllDockedShips(), s)))
+				if (s == null || s.bDestroyed || s == cur)
 				{
 					continue;
+				}
+				if (cur != null && System.Linq.Enumerable.Contains(cur.GetAllDockedShips(), s))
+				{
+					// Docked to us here (an AI tug the host undocked with its own call, which isn't relayed). Not if our
+					// character is aboard: then it's not gone for us, and the host will say otherwise soon.
+					CondOwner mine = CrewClaim.ClientMine;
+					if (mine != null && mine.ship == s)
+					{
+						Plugin.Log.LogWarning("Ship " + reg + " is gone on the host, but we're aboard; kept");
+						continue;
+					}
+					// Unlink only, as the game does before hiding it (CrewSim.UndockShipInverse); it's removed next.
+					foreach (Ship other in new List<Ship>(s.GetDockedShipsAndPortIDs().Values))
+					{
+						if (other != null)
+						{
+							s.Undock(other);
+							other.ResetDockedCache();
+						}
+					}
+					s.ResetDockedCache();
+					Plugin.Log.LogInfo("Ship " + reg + " is gone on the host, undocked from us");
 				}
 				Plugin.Log.LogInfo("Ship " + reg + " is gone on the host, removing");
 				s.Destroy(isDespawning: false);

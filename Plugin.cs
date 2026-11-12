@@ -19,7 +19,7 @@ namespace OstranautsMP
 
 		public const string PluginName = "Ostranauts Multiplayer";
 
-		public const string Version = "0.41.0";
+		public const string Version = "0.41.6";
 
 		internal static ManualLogSource Log;
 
@@ -765,7 +765,7 @@ namespace OstranautsMP
 			Net.Stop();
 			if (InstanceLog.Instance != null)
 			{
-				InstanceLog.Instance.Flush(true);
+				InstanceLog.Instance.End();
 			}
 		}
 	}

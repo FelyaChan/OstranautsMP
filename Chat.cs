@@ -579,7 +579,7 @@ namespace OstranautsMP
 		// two or three rooms), and one of the two inside a ship's room while the other is out of one (the hull). An
 		// unclear line has some of its letters lost to static ("~", a crackle when it's typed out).
 
-		private const double RadioDrain = 0.01;
+		private const double RadioDrain = 0.001;
 
 		private const float RadioClearRange = 12f;
 

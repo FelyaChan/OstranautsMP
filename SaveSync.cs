@@ -84,7 +84,7 @@ namespace OstranautsMP
 			ClientLoad.Begin();
 			// The connection it's for: if that client goes and another comes, the rest isn't sent to the new one.
 			int conn = net.ConnId;
-			Thread t = new Thread(() =>
+			NetSession.StartThread("save sender", () =>
 			{
 				long sent = 0L;
 				net.Send("SAVE_BEGIN " + total);
@@ -114,8 +114,6 @@ namespace OstranautsMP
 				Progress = null;
 				Plugin.Log.LogInfo("Save sent");
 			});
-			t.IsBackground = true;
-			t.Start();
 		}
 
 		// Host side: the ship we're on plus everything docked to it, as of the client's last READY. Null until then.

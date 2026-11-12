@@ -131,7 +131,7 @@ namespace OstranautsMP
 		}
 
 		// The static burst against the voice.
-		private const float ClickLevel = 0.45f;
+		private const float ClickLevel = 0.315f;
 
 		private static float RadioVolume()
 		{
@@ -309,7 +309,7 @@ namespace OstranautsMP
 
 		private const float RadioHighHz = 2800f;
 
-		private const float RadioHiss = 0.02f;
+		private const float RadioHiss = 0.014f;
 
 		private const float RadioDrive = 4f;
 

@@ -3,6 +3,36 @@
 All notable changes to the Ostranauts Multiplayer Mod.
 Host and client must run the same version.
 
+## [0.41.6] - 2026-11-11
+
+### Fixed
+- Client: an AI ship that leaves by docking and disappearing (the tug that brings a ship in) disappears for the client too, undocking first if it was docked to the client's ship.
+
+## [0.41.5] - 2026-11-11
+
+### Fixed
+- Client: an item check that the host's fix doesn't clear is asked again only 3 times, until something changes, instead of every 10 s. The host's log tells where such an item really is.
+
+## [0.41.4] - 2026-11-11
+
+### Changed
+- Radio: a line takes 0.1% of the suit battery instead of 1%; its hiss and static are 30% quieter.
+
+## [0.41.3] - 2026-11-11
+
+### Fixed
+- Client: actions run there by others than the client's character (breathing in vacuum, putting items on, zone triggers, ship messages) no longer make their own items or random outcomes; only their condition changes apply there, the rest comes from the host. A person in vacuum got their own scare items on the client.
+
+## [0.41.2] - 2026-11-11
+
+### Fixed
+- Fixed doppelgänger entity.
+
+## [0.41.1] - 2026-11-11
+
+### Added
+- Logs for crashes and disconnects: a note at startup when the last run didn't end normally (with where Unity's log and crash report are), a network line every 30 s (every 5 s when slow), a report of why a connection ended, the other side's clock to line up both logs, and errors from background threads.
+
 ## [0.41.0] - 2026-11-08
 
 ### Added
@@ -11,7 +41,7 @@ Host and client must run the same version.
 - A "..." over a player's character while they type in the quick chat, for both players.
 - Client: an alert when the host starts saving.
 - PDA chat: a field to write in (Enter or **Send**), and a sound for every message received, chat open or not.
-- Radio: in a helmet with a charged suit battery, speech goes over the suit radio, with its own plate and sound. It reaches two or three rooms; each line takes 1% of the battery; below half charge, at the edge of its range or through the hull, letters are lost to static. Out loud, speech is only heard in the same room or in sight of the speaker. In a helmet without power, or with no air around, nobody hears it: others only see the lips move.
+- Radio: in a helmet with a charged suit battery, speech goes over the suit radio, with its own plate and sound. It reaches two or three rooms; each line takes a little of the battery; below half charge, at the edge of its range or through the hull, letters are lost to static. Out loud, speech is only heard in the same room or in sight of the speaker. In a helmet without power, or with no air around, nobody hears it: others only see the lips move.
 - Nav station: **Clear** for the proximity and tracking warnings clears them for both players.
 
 ### Changed

@@ -515,6 +515,8 @@ namespace OstranautsMP
 		//   client: RESYNC <group>|<id>=<place>\t<id>=<place>...
 		//   host:   ITEM for each item that is missing or elsewhere on the client (full save only if missing),
 		//           GONE for each item the client has and the host doesn't.
+		// A group that stays exactly the same on both sides after MaxSameResyncs resyncs is left alone until either side
+		// changes: the host's fix doesn't take, so asking again only repeats it.
 
 		private const float CheckInterval = 5f;
 
@@ -523,6 +525,11 @@ namespace OstranautsMP
 		private static float _nextCheck;
 
 		private static readonly Dictionary<string, int> Mismatches = new Dictionary<string, int>();
+
+		private const int MaxSameResyncs = 3;
+
+		// Client: per group, the host's and our hash at the last resync, and how many resyncs in a row had them.
+		private static readonly Dictionary<string, KeyValuePair<string, int>> SameResyncs = new Dictionary<string, KeyValuePair<string, int>>();
 
 		private static string _notice;
 
@@ -583,9 +590,17 @@ namespace OstranautsMP
 				{
 					mine = new List<CondOwner>();
 				}
-				if (Hash(mine) == hostHash)
+				string myHash = Hash(mine);
+				if (myHash == hostHash)
 				{
 					Mismatches.Remove(key);
+					SameResyncs.Remove(key);
+					continue;
+				}
+				string pair = hostHash + "/" + myHash;
+				KeyValuePair<string, int> same;
+				if (SameResyncs.TryGetValue(key, out same) && same.Key == pair && same.Value >= MaxSameResyncs)
+				{
 					continue;
 				}
 				int n;
@@ -598,6 +613,12 @@ namespace OstranautsMP
 				}
 				Mismatches.Remove(key);
 				requested++;
+				int tries = (same.Key == pair) ? same.Value + 1 : 1;
+				SameResyncs[key] = new KeyValuePair<string, int>(pair, tries);
+				if (tries == MaxSameResyncs)
+				{
+					Plugin.Log.LogWarning("Desync in " + key + " doesn't clear; not asking again until it changes");
+				}
 				StringBuilder sb = new StringBuilder();
 				foreach (CondOwner co in mine)
 				{
@@ -686,7 +707,7 @@ namespace OstranautsMP
 					// We have it, just somewhere else: send where.
 					Dirty[id] = co;
 					moved++;
-					Which(which, "elsewhere", co, Signature(co), theirs[id]);
+					Which(which, "elsewhere", co, Signature(co) + " (" + WhereReally(co) + ")", theirs[id]);
 				}
 				else
 				{
@@ -698,6 +719,33 @@ namespace OstranautsMP
 			Plugin.Log.LogWarning("Client desync in " + key + ": " + missing + " missing, " + moved + " misplaced, " + extra + " extra" + which);
 			_notice = "DESYNC: client resynced " + key + " (" + (missing + moved + extra) + " items)";
 			_noticeUntil = Time.unscaledTime + 10f;
+		}
+
+		// Host, resync log: whether an item is really where it says it is (an item the scan didn't find).
+		private static string WhereReally(CondOwner co)
+		{
+			StringBuilder sb = new StringBuilder();
+			CondOwner head = co.coStackHead;
+			if (head != null)
+			{
+				sb.Append("in head's stack: ").Append(head.aStack != null && head.aStack.Contains(co) ? "yes" : "NO");
+			}
+			else if (co.objCOParent != null)
+			{
+				CondOwner p = co.objCOParent;
+				if (co.slotNow != null)
+				{
+					sb.Append("in slot: ").Append(co.slotNow.aCOs != null && Array.IndexOf(co.slotNow.aCOs, co) >= 0 ? "yes" : "NO");
+				}
+				else
+				{
+					sb.Append("in container: ").Append(p.objContainer != null && p.objContainer.ContainedCOs.Contains(co) ? "yes" : "NO");
+				}
+				sb.Append(", parent ").Append(p.bDestroyed ? "destroyed" : "ok");
+			}
+			sb.Append(", ship ").Append(co.ship != null ? co.ship.strRegID + (co.ship.GetCOByID(co.strID) == co ? " lists it" : " doesn't list it") : "none");
+			sb.Append(co.bDestroyed ? ", destroyed" : "").Append(co.Visible ? "" : ", hidden");
+			return sb.ToString();
 		}
 
 		// For the resync log: the first few items, with their kind and place here / on the client.

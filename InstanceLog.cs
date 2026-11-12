@@ -13,6 +13,9 @@ namespace OstranautsMP
 	// Per-instance log: BepInEx/OstranautsMP_<n>.log, where n is the first slot not held by another running instance.
 	// Two game instances share Player.log and overwrite each other; this file belongs to one process only.
 	// The previous run's file is kept as OstranautsMP_<n>.prev.log so a crash log survives a restart.
+	// A normal exit ends the file with EndMarker; a previous file without it (the game crashed, froze and was killed,
+	// or the computer went off) is reported at the top of the new one, with its last entry's time and where Unity's
+	// own log and crash reports are.
 	public class InstanceLog : ILogListener
 	{
 		private const int MaxSlots = 8;
@@ -40,6 +43,13 @@ namespace OstranautsMP
 
 		private DateTime _windowStart = DateTime.UtcNow;
 
+		private const string EndMarker = "=== Session ended normally";
+
+		// The previous run's file didn't end normally: its last line (or "" when that couldn't be told).
+		private string _previousCut;
+
+		private DateTime _previousTime;
+
 		public static void Start()
 		{
 			InstanceLog log = new InstanceLog();
@@ -57,6 +67,60 @@ namespace OstranautsMP
 			log.Write("Command line: " + Environment.CommandLine);
 			log.Write("System memory: " + SystemInfo.systemMemorySize + " MB, GPU: " + SystemInfo.graphicsDeviceName + " (" + SystemInfo.graphicsMemorySize + " MB)");
 			log.LogMemory();
+			log.ReportPrevious();
+			log.Flush();
+		}
+
+		private void ReportPrevious()
+		{
+			if (_previousCut == null)
+			{
+				return;
+			}
+			Write("[Previous run] " + Path.GetFileNameWithoutExtension(FilePath) + ".prev.log did not end normally (the game crashed, hung and was closed, or the computer went off). Its last entry: " + ((_previousCut.Length > 0) ? _previousCut : "(empty)"));
+			try
+			{
+				string unityLog = Application.consoleLogPath;
+				if (!string.IsNullOrEmpty(unityLog))
+				{
+					Write("[Previous run] Unity's log of that run: " + Path.Combine(Path.GetDirectoryName(unityLog), "Player-prev.log"));
+				}
+				string crashes = Path.Combine(Path.Combine(Path.Combine(Path.GetTempPath(), Application.companyName), Application.productName), "Crashes");
+				if (Directory.Exists(crashes))
+				{
+					string newest = null;
+					DateTime newestTime = DateTime.MinValue;
+					foreach (string dir in Directory.GetDirectories(crashes))
+					{
+						DateTime t = Directory.GetLastWriteTime(dir);
+						if (t > newestTime)
+						{
+							newestTime = t;
+							newest = dir;
+						}
+					}
+					// A report written after the previous run started is that run's.
+					if (newest != null && newestTime >= _previousTime)
+					{
+						Write("[Previous run] Unity crash report: " + newest + " (" + newestTime.ToString("yyyy-MM-dd HH:mm:ss") + ")");
+					}
+					else
+					{
+						Write("[Previous run] no Unity crash report for it in " + crashes);
+					}
+				}
+			}
+			catch (Exception e)
+			{
+				Write("[Previous run] could not look for Unity's reports: " + e.Message);
+			}
+		}
+
+		// The game is closing the usual way.
+		public void End()
+		{
+			Write(EndMarker + " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+			Flush(true);
 		}
 
 		private bool Open()
@@ -80,7 +144,9 @@ namespace OstranautsMP
 					{
 						byte[] old = new byte[fs.Length];
 						fs.Read(old, 0, old.Length);
-						File.WriteAllBytes(Path.Combine(Paths.BepInExRootPath, "OstranautsMP_" + i + ".prev.log"), old);
+						string prevPath = Path.Combine(Paths.BepInExRootPath, "OstranautsMP_" + i + ".prev.log");
+						File.WriteAllBytes(prevPath, old);
+						CheckPrevious(old, File.GetLastWriteTime(path));
 					}
 				}
 				catch
@@ -105,6 +171,43 @@ namespace OstranautsMP
 				return true;
 			}
 			return false;
+		}
+
+		// The previous file's end: a normal exit leaves EndMarker in its last lines.
+		private void CheckPrevious(byte[] old, DateTime written)
+		{
+			string tail = Encoding.UTF8.GetString(old, Math.Max(0, old.Length - 4096), Math.Min(old.Length, 4096));
+			if (tail.Contains(EndMarker))
+			{
+				return;
+			}
+			string[] lines = tail.Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+			string last = "";
+			for (int i = lines.Length - 1; i >= 0; i--)
+			{
+				string l = lines[i].TrimEnd('\r');
+				if (l.StartsWith("[", StringComparison.Ordinal))
+				{
+					last = (l.Length > 200) ? (l.Substring(0, 200) + "...") : l;
+					break;
+				}
+			}
+			_previousCut = last;
+			// The run started some time before its last write; a crash report from then on is its.
+			_previousTime = written.AddHours(-12.0);
+			try
+			{
+				string head = Encoding.UTF8.GetString(old, 0, Math.Min(old.Length, 512));
+				int at = head.IndexOf("started ", StringComparison.Ordinal);
+				DateTime started;
+				if (at >= 0 && head.Length >= at + 8 + 19 && DateTime.TryParseExact(head.Substring(at + 8, 19), "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out started))
+				{
+					_previousTime = started;
+				}
+			}
+			catch
+			{
+			}
 		}
 
 		public void Write(string line)

@@ -197,6 +197,11 @@ namespace OstranautsMP
 			{
 				foreach (JsonCondOwnerSave s in stored)
 				{
+					// A save left behind by something that has since moved on and is live elsewhere: stale.
+					if (DataHandler.mapCOs.ContainsKey(s.strID))
+					{
+						continue;
+					}
 					if (added.Add(s.strID))
 					{
 						p.COs.Add(s);
@@ -445,6 +450,7 @@ namespace OstranautsMP
 			{
 				system.RegisterShipOwner(reg, owner);
 			}
+			int elsewhere = 0;
 			if (p.COs != null)
 			{
 				foreach (JsonCondOwnerSave s in p.COs)
@@ -453,9 +459,21 @@ namespace OstranautsMP
 					{
 						continue;
 					}
+					// Still live after the old ship is gone: it's on another ship here (a stale save in their copy).
+					// Overwriting or unlisting it would leave a person or item the game can't find, then respawns.
+					CondOwner live;
+					if (DataHandler.mapCOs.TryGetValue(s.strID, out live) && live != null && !live.bDestroyed && live.ship != null && !live.ship.bDestroyed)
+					{
+						elsewhere++;
+						continue;
+					}
 					DataHandler.dictCOSaves[s.strID] = s;
 					DataHandler.mapCOs.Remove(s.strID);
 				}
+			}
+			if (elsewhere > 0)
+			{
+				Plugin.Log.LogInfo("Replacing " + reg + ": kept " + elsewhere + " items that are elsewhere here");
 			}
 			GameObject go = new GameObject("goShip");
 			GameObject playState = GameObject.Find("PlayState");

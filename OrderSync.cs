@@ -25,6 +25,12 @@ namespace OstranautsMP
 	// prediction failing here (unable to do it, can't reach it) aren't shown either: whether it fails is the host's
 	// call. Orders from the client's own AI (WorkManager, pledges) are not sent.
 	//
+	// Other actions that still run on the client (breathing in vacuum, putting on or taking off an item, zone
+	// triggers, ship messages): effects that only change conditions apply here at once, and the host's values follow.
+	// Effects that create, destroy, take, give or use items, change an item's kind, attack, teleport, add a pledge or
+	// a crime are the host's alone, and so is a random pick of the next step in a chain: here the chain stops there.
+	// Inside player input (inventory screen, trading) everything applies, as above.
+	//
 	// A direct order from the client (not task work: the work manager retries those its own way, nor the AI's own
 	// actions) that the host's copy drops without doing it (the game's re-check on arrival fails, the target can't be
 	// reached, it's cancelled) is dropped on the client too, and the reason the game gave goes to the client
@@ -103,9 +109,8 @@ namespace OstranautsMP
 			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyChain", new Type[] { typeof(List<string>) }), postfix: applied);
 			harmony.Patch(AccessTools.Method(typeof(CondOwner), "ClearInteraction"), prefix: new HarmonyMethod(typeof(OrderSync), nameof(ClearInteractionPrefix)));
 			harmony.Patch(AccessTools.Method(typeof(CondOwner), "LogMessage"), prefix: new HarmonyMethod(typeof(OrderSync), nameof(LogMessagePrefix)), postfix: new HarmonyMethod(typeof(OrderSync), nameof(LogMessagePostfix)));
-			HarmonyMethod noEffects = new HarmonyMethod(typeof(OrderSync), nameof(NoEffectsPrefix));
-			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyEffects", new Type[] { typeof(List<string>), typeof(bool) }), prefix: noEffects);
-			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyChain", new Type[] { typeof(List<string>) }), prefix: noEffects);
+			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyEffects", new Type[] { typeof(List<string>), typeof(bool) }), prefix: new HarmonyMethod(typeof(OrderSync), nameof(NoEffectsPrefix)));
+			harmony.Patch(AccessTools.Method(typeof(Interaction), "ApplyChain", new Type[] { typeof(List<string>) }), prefix: new HarmonyMethod(typeof(OrderSync), nameof(ChainPrefix)));
 			int patched = 0;
 			foreach (Type t in typeof(Ostranauts.Inventory.GUIInventory).Assembly.GetTypes())
 			{
@@ -273,7 +278,53 @@ namespace OstranautsMP
 		private static bool NoEffectsPrefix(Interaction __instance)
 		{
 			bool relayedOrQueued = _userInput <= 0 || _inProcess > 0;
-			return !(relayedOrQueued && PredictedHere(__instance.objUs));
+			if (relayedOrQueued && PredictedHere(__instance.objUs))
+			{
+				return false;
+			}
+			return !(HostDecides(__instance) && HostOnly(__instance));
+		}
+
+		// ApplyChain is: log, effects, then the reply's chain. A random reply is the host's pick, so it's not followed.
+		private static bool ChainPrefix(Interaction __instance, List<string> aLog)
+		{
+			if (!NoEffectsPrefix(__instance))
+			{
+				return false;
+			}
+			if (!HostDecides(__instance) || !__instance.bRandomInverse || __instance.aInverse == null || __instance.aInverse.Length == 0)
+			{
+				return true;
+			}
+			if (__instance.objUs != null && __instance.objThem != null)
+			{
+				__instance.ApplyLogging(__instance.objUs.strName, bTraitSuffix: true);
+				__instance.ApplyEffects(aLog);
+			}
+			return false;
+		}
+
+		// Client following the host, outside player input, an action by anyone but our own character (those have no
+		// effects here at all, see PredictedHere).
+		private static bool HostDecides(Interaction ia)
+		{
+			if (!ClientActive || (_userInput > 0 && _inProcess <= 0))
+			{
+				return false;
+			}
+			CondOwner mine = CrewClaim.ClientMine;
+			return mine == null || ia.objUs != mine;
+		}
+
+		// Effects beyond conditions: items, kind changes, attacks, moves, pledges, crimes.
+		private static bool HostOnly(Interaction ia)
+		{
+			return ia.strLootItmAddUs != null || ia.strLootItmAddThem != null || ia.strLootItmRemoveThem != null || ia.strLootCTsRemoveUs != null || ia.strLootCTsGive != null || ia.strLootCTsUse != null || ia.strLootCTsTake != null || ia.strLootItmInputs != null || ia.objLootModeSwitch != null || ia.objLootModeSwitchThem != null || ia.attackMode != null || ia.strTeleport != null || ia.strStartInstall != null || ia.strPledgeAdd != null || ia.strPledgeAddThem != null || !string.IsNullOrEmpty(ia.strCrime) || Any(ia.aLootItemGiveContract) || Any(ia.aLootItemTakeContract) || Any(ia.aLootItemRemoveContract) || Any(ia.aLootItemUseContract);
+		}
+
+		private static bool Any(List<CondOwner> list)
+		{
+			return list != null && list.Count > 0;
 		}
 
 		private static bool LogMessagePrefix(CondOwner __instance, string strMsg, string strColor)
