@@ -1,6 +1,6 @@
 # Ostranauts Multiplayer (Direct IP) (Archived)
 
-# ****After discovering several similar multiplayer projects already in development, I've decided to archive this project rather than pursue another implementation of the same idea.**
+# **After discovering several similar multiplayer projects already in development, I've decided to archive this project rather than pursue another implementation of the same idea.**
 
 # **The project is now open for anyone interested in researching, exploring, or reusing its work. Feel free to use it in any way you like.**
 
